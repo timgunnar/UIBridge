@@ -32,7 +32,7 @@ graph LR
 ## 第一章：安装
 
 ```bash
-git clone https://github.com/your-org/uibridge.git
+git clone https://github.com/timgunnar/UIBridge.git
 cd uibridge
 pip install -e .                    # 可编辑安装（工具目录不能删）
 playwright install chromium

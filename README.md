@@ -84,7 +84,7 @@ flowchart LR
 
 ```bash
 # 1. 安装
-git clone https://github.com/your-org/uibridge.git && cd uibridge
+git clone https://github.com/timgunnar/UIBridge.git && cd uibridge
 pip install -e .
 playwright install chromium
 
