@@ -10,6 +10,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 from playwright.sync_api import sync_playwright
+from playwright._impl._errors import Error as PlaywrightError
+
+
+def _require_browser():
+    """Check if Playwright browser is available, skip test if not."""
+    try:
+        with sync_playwright() as pw:
+            pw.chromium.launch(headless=True).close()
+    except PlaywrightError as e:
+        if "Executable doesn't exist" in str(e):
+            pytest.skip("Playwright browser not installed — run: playwright install chromium")
 
 
 HTML_FORM_PAGE = """<!DOCTYPE html>
@@ -31,6 +42,7 @@ class TestEndToEnd:
 
     @pytest.fixture(autouse=True)
     def setup(self):
+        _require_browser()
         from uibridge.adapter.reference import (
             ReferenceComponentResolver,
             ReferenceLocatorStrategy,
@@ -305,6 +317,7 @@ class TestEndToEnd:
         from playwright.sync_api import sync_playwright
         from uibridge.engine.recorder import RecordingSession
 
+        browser = None
         pw = sync_playwright().start()
         try:
             browser = pw.chromium.launch(headless=True)
@@ -329,7 +342,8 @@ class TestEndToEnd:
                        for s in recording.steps]
             assert "input" in actions or "navigate" in actions
         finally:
-            browser.close()
+            if browser:
+                browser.close()
             pw.stop()
 
     def test_session_thread_safety(self):
@@ -337,6 +351,7 @@ class TestEndToEnd:
         from playwright.sync_api import sync_playwright
         from uibridge.engine.recorder import RecordingSession
 
+        browser = None
         pw = sync_playwright().start()
         try:
             browser = pw.chromium.launch(headless=True)
@@ -357,5 +372,6 @@ class TestEndToEnd:
             # 应至少有 navigate + 多次 input/click
             assert len(recording.steps) >= 3
         finally:
-            browser.close()
+            if browser:
+                browser.close()
             pw.stop()
