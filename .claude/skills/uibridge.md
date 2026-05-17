@@ -4,7 +4,7 @@ description: UI 自动化测试脚本智能生成 — 录制浏览器操作 → 
 kind: skill
 ---
 
-# Web Monitor — 测试脚本智能生成
+# uibridge — 测试脚本智能生成
 
 ## 何时调用
 
