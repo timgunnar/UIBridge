@@ -1,0 +1,24 @@
+id: human_conventions_convention_import_style
+category: conventions
+key: convention.import_style
+value:
+  style: fluent_import
+  examples:
+  - import com.fluent.pages.UserPage;
+  - import com.fluent.builders.UserBuilder;
+  - import static org.assertj.core.api.Assertions.assertThat;
+confidence:
+  score: 0.95
+  source: human_injection
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.95
+description: Java Fluent import style (AssertJ)
+tags:
+- human
+- convention
+source_file: human
+version: 1
+archived: false
+updated_at: 1778935961.6378214
+created_at: 1778935961.6378193

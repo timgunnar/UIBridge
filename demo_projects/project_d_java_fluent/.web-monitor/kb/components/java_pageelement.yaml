@@ -1,0 +1,55 @@
+id: java_pageelement
+category: components
+key: java.com.fluent.elements.PageElement
+value:
+  class_name: PageElement
+  package: com.fluent.elements
+  methods:
+  - name: click
+    params: []
+    returns: PageElement
+    modifiers:
+    - public
+  - name: enter
+    params:
+    - name: text
+      type: String
+    returns: PageElement
+    modifiers:
+    - public
+  - name: getText
+    params: []
+    returns: String
+    modifiers:
+    - public
+  - name: shouldBeVisible
+    params: []
+    returns: PageElement
+    modifiers:
+    - public
+  - name: shouldContain
+    params:
+    - name: text
+      type: String
+    returns: PageElement
+    modifiers:
+    - public
+  annotations:
+  - FindBy
+  source_file: src\main\java\com\fluent\elements\PageElement.java
+confidence:
+  score: 0.7
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.7
+description: 'Java class: com.fluent.elements.PageElement with 5 methods'
+tags:
+- PageElement
+- java
+- component
+source_file: src\main\java\com\fluent\elements\PageElement.java
+version: 1
+archived: false
+updated_at: 1778935961.616004
+created_at: 1778935961.6159787

@@ -1,0 +1,61 @@
+id: comp_tableaw
+category: components
+key: component.TableAW
+value:
+  class_name: TableAW
+  xpath_patterns: []
+  methods:
+  - name: __init__
+    params:
+    - page
+    - xpath
+    returns: null
+  - name: wait_loaded
+    params:
+    - timeout
+    returns: null
+  - name: get_row_count
+    params: []
+    returns: int
+  - name: click_row
+    params:
+    - index
+    returns: null
+  - name: get_cell_text
+    params:
+    - row
+    - col
+    returns: str
+  - name: assert_row_contains
+    params:
+    - text
+    returns: null
+  - name: filter_by_column
+    params:
+    - col
+    - value
+    returns: null
+  - name: select_all
+    params: []
+    returns: null
+  - name: click_action
+    params:
+    - row_index
+    - action_text
+    returns: null
+  source_file: aaw\table_aw.py
+confidence:
+  score: 0.7
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.7
+description: 'Component AW: TableAW with 9 methods'
+tags:
+- TableAW
+- component
+source_file: aaw\table_aw.py
+version: 1
+archived: false
+updated_at: 1778931989.1449275
+created_at: 1778931989.1448977

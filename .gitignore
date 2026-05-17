@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.tox/
+
+# Generated output
+generated/
+recording.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code — local settings (permissions are per-user)
+.claude/settings.local.json
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Node (Playwright MCP)
+node_modules/
+package-lock.json

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uibridge"
+version = "0.1.0"
+description = "给你的企业 UI 自动化框架装上 AI 接口 — 学习团队约定，生成同风格的分层测试代码"
+requires-python = ">=3.9"
+dependencies = [
+    "playwright>=1.52.0",
+    "pytest>=8.0.0",
+    "click>=8.0.0",
+    "jinja2>=3.0.0",
+    "pyyaml>=6.0",
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+uibridge = "uibridge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["uibridge*"]
+
+[project.optional-dependencies]
+test = [
+    "javalang>=0.13.0",
+]

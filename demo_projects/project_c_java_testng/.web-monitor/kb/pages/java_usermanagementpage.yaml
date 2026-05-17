@@ -1,0 +1,30 @@
+id: java_usermanagementpage
+category: pages
+key: java.com.acme.pages.UserManagementPage
+value:
+  class_name: UserManagementPage
+  package: com.acme.pages
+  methods:
+  - name: navigateTo
+    params: []
+    returns: void
+    modifiers:
+    - public
+  annotations: []
+  source_file: src\main\java\com\acme\pages\UserManagementPage.java
+confidence:
+  score: 0.7
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.7
+description: 'Java class: com.acme.pages.UserManagementPage with 1 methods'
+tags:
+- UserManagementPage
+- java
+- page
+source_file: src\main\java\com\acme\pages\UserManagementPage.java
+version: 1
+archived: false
+updated_at: 1778935961.5562646
+created_at: 1778935961.5562305

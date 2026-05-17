@@ -1,0 +1,37 @@
+id: comp_dialogaw
+category: components
+key: component.DialogAW
+value:
+  class_name: DialogAW
+  xpath_patterns: []
+  methods:
+  - name: __init__
+    params:
+    - page
+    - xpath
+    returns: null
+  - name: wait_visible
+    params: []
+    returns: null
+  - name: confirm
+    params: []
+    returns: null
+  - name: cancel
+    params: []
+    returns: null
+  source_file: aaw\dialog_aw.py
+confidence:
+  score: 0.7
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.7
+description: 'Component AW: DialogAW with 4 methods'
+tags:
+- DialogAW
+- component
+source_file: aaw\dialog_aw.py
+version: 1
+archived: false
+updated_at: 1778931989.1341672
+created_at: 1778931989.1341553

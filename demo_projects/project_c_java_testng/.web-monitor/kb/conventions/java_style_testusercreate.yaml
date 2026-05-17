@@ -1,0 +1,35 @@
+id: java_style_testusercreate
+category: conventions
+key: java.style.TestUserCreate
+value:
+  class_name: TestUserCreate
+  package: com.acme.tests
+  imports:
+  - com.acme.pages.UserManagementPage
+  - com.acme.data.UserTestData
+  - org.testng.annotations.Test
+  - org.testng.annotations.BeforeMethod
+  - org.testng.Assert
+  - org.openqa.selenium.WebDriver
+  - org.openqa.selenium.chrome.ChromeDriver
+  annotations:
+  - BeforeMethod
+  - Test
+  source_file: src\test\java\com\acme\tests\TestUserCreate.java
+confidence:
+  score: 0.6
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.6
+description: Java test style from TestUserCreate
+tags:
+- TestUserCreate
+- java
+- test
+- style
+source_file: src\test\java\com\acme\tests\TestUserCreate.java
+version: 1
+archived: false
+updated_at: 1778935961.5651946
+created_at: 1778935961.5651803

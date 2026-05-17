@@ -1,0 +1,26 @@
+id: human_conventions_convention_naming
+category: conventions
+key: convention.naming
+value:
+  naming_rules:
+  - pattern: page
+    replacement: currentPage
+confidence:
+  score: 0.95
+  source: human_injection
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.95
+  last_validated_at: 0.0
+  decay_rate: 0.0
+  manual_override: null
+  history: []
+description: 'Test naming rule: rename page → currentPage'
+tags:
+- human
+- convention
+source_file: human
+created_at: 1779016057.5016885
+updated_at: 1779016057.501694
+version: 1
+archived: false

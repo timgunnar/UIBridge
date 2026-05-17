@@ -1,0 +1,32 @@
+id: comp_baseaw
+category: components
+key: component.BaseAW
+value:
+  class_name: BaseAW
+  xpath_patterns: []
+  methods:
+  - name: __init__
+    params:
+    - page
+    - xpath
+    returns: null
+  - name: wait_visible
+    params:
+    - timeout
+    returns: null
+  source_file: aaw\base_aw.py
+confidence:
+  score: 0.7
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.7
+description: 'Component AW: BaseAW with 2 methods'
+tags:
+- BaseAW
+- component
+source_file: aaw\base_aw.py
+version: 1
+archived: false
+updated_at: 1778931989.1288292
+created_at: 1778931989.1288161

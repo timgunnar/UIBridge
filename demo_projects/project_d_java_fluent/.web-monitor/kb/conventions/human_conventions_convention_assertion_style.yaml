@@ -1,0 +1,23 @@
+id: human_conventions_convention_assertion_style
+category: conventions
+key: convention.assertion_style
+value:
+  type: assertj
+  examples:
+  - assertThat(x).isTrue()
+  - assertThat(y).contains(text)
+confidence:
+  score: 0.95
+  source: human_injection
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.95
+description: AssertJ fluent assertion style
+tags:
+- human
+- convention
+source_file: human
+version: 1
+archived: false
+updated_at: 1778935961.639474
+created_at: 1778935961.6394718

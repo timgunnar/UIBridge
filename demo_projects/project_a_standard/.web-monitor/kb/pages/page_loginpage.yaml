@@ -1,0 +1,22 @@
+id: page_loginpage
+category: pages
+key: page.LoginPage
+value:
+  class_name: LoginPage
+  feature_points: []
+  source_file: pages\login_page.py
+confidence:
+  score: 0.7
+  source: static_analysis
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.7
+description: 'Page: LoginPage with 0 feature points'
+tags:
+- LoginPage
+- page
+source_file: pages\login_page.py
+version: 1
+archived: false
+updated_at: 1778931989.1485777
+created_at: 1778931989.148566

@@ -1,0 +1,23 @@
+id: human_conventions_convention_import_style
+category: conventions
+key: convention.import_style
+value:
+  style: from_package_import_class
+  examples:
+  - from pages.x_page import XPage
+  - from aaw.x_aw import XAW
+confidence:
+  score: 0.95
+  source: human_injection
+  self_test_passes: 0
+  self_test_failures: 0
+  effective_score: 0.95
+description: Import style for Project A
+tags:
+- human
+- convention
+source_file: human
+version: 1
+archived: false
+updated_at: 1778931989.1600645
+created_at: 1778931989.1600626
