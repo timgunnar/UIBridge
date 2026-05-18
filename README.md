@@ -31,7 +31,7 @@ graph LR
 |------|------|
 | **框架知识库** | 自动扫描源码建立，自检反馈持续演化。NL 纠错永久生效。YAML 存储、可 commit |
 | **零操作接入 AI** | 复制 3 个文件 + 改 1 行配置 → 启动 Agent 即用。AI 自动注册 8 个工具 |
-| **交互录制 → 分层代码** | 你在浏览器操作，AI 录着。生成 ComponentAW → BusinessAW → TestScript 四层结构 |
+| **交互录制 → 分层代码** | 你在浏览器操作，AI 录着。生成 ComponentAW → BusinessAW → TestScript + TestData 四层结构 |
 | **零侵入 + 最低成本** | 不碰现有代码，已有测试继续跑。卸载: `uibridge cleanup --yes && pip uninstall uibridge -y` |
 
 ---
@@ -90,7 +90,7 @@ playwright install chromium
 
 # 2. 验证
 uibridge --help
-python -m pytest tests/ -v   # 107 个测试
+python -m pytest tests/ -v   # 131 个测试
 
 # 3. 卸载
 uibridge cleanup --yes    # 清理项目中所有生成文件

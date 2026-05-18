@@ -6,6 +6,8 @@
 或在 .mcp.json 中注册为 Claude Code 等 Agent 的工具源。
 """
 
+import asyncio
+import concurrent.futures
 import json
 import threading
 from pathlib import Path
@@ -19,12 +21,61 @@ mcp = FastMCP(
     instructions="UI 自动化测试脚本智能生成系统 — 录制浏览器操作 → 自动生成测试代码",
 )
 
-# ── 模块级录制状态（跨 MCP 工具调用保持）──────────
+# ── 单线程执行器：所有 sync Playwright 操作在此线程运行 ──
+#   max_workers=1 保证 start_recording / stop_recording 在同一线程，
+#   sync_playwright() 在此线程无 asyncio 事件循环，不会冲突。
+_pw_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="uibridge_pw")
+
+
+async def _run_pw(func, *args, **kwargs):
+    """在专用 Playwright 线程中执行同步函数，返回结果或传播异常。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_pw_executor, lambda: func(*args, **kwargs))
+
+
+# ── 模块级录制状态 ──────────────────────────────────────
 _active_recording: dict | None = None
 _recording_lock = threading.Lock()
 
 
-# ── 辅助函数 ──────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+# 辅助函数（线程安全，不调 Playwright API）
+# ═══════════════════════════════════════════════════════════
+
+# 禁止的协议前缀，防止 URL 注入
+_BLOCKED_URL_SCHEMES = ("javascript:", "data:", "vbscript:", "file:")
+
+# 允许的输出基础目录（Path.resolve 后的锚点）
+_OUTPUT_BASE = Path(__file__).resolve().parent.parent
+
+
+def _validate_url(url: str) -> str:
+    """校验 URL，拒绝危险协议和空 URL。返回规范化字符串或抛 ValueError。"""
+    if not url or not url.strip():
+        raise ValueError("URL 不能为空")
+    stripped = url.strip()
+    lowered = stripped.lower()
+    for scheme in _BLOCKED_URL_SCHEMES:
+        if lowered.startswith(scheme):
+            raise ValueError(f"禁止的 URL 协议: {scheme}")
+    if not (lowered.startswith("http://") or lowered.startswith("https://") or lowered == "about:blank"):
+        raise ValueError("URL 必须以 http:// 或 https:// 开头")
+    return stripped
+
+
+def _sanitize_output_path(raw: str) -> Path:
+    """将用户输入的路径安全化，限制在 _OUTPUT_BASE 内。"""
+    p = Path(raw).resolve()
+    if not str(p).startswith(str(_OUTPUT_BASE)):
+        p = _OUTPUT_BASE / p.name
+    return p
+
+
+def _sanitize_input_path(raw: str) -> Path:
+    """安全解析输入路径，禁止相对路径穿越。"""
+    p = Path(raw).resolve()
+    return p
+
 
 def _load_adapter(adapter_config_path: Optional[str] = None):
     """加载适配器的 5 个接口实例"""
@@ -71,56 +122,115 @@ def _load_adapter(adapter_config_path: Optional[str] = None):
 
 
 def _detect_source_dirs(project_dir: str) -> dict[str, str]:
-    """自动检测项目类型并返回对应的源码目录映射。
+    """自动检测 Java 项目源码目录结构，支持标准和非标布局。
 
-    支持 Python（pyproject.toml / setup.py）、Java Maven（pom.xml）、
-    Java Gradle（build.gradle）。"""
+    优先级：
+    1. pom.xml 中声明的 <sourceDirectory> / <testSourceDirectory>
+    2. 标准 Maven 布局 src/main/java / src/test/java
+    3. 递归扫描 src/ 下的 .java 文件反推目录
+    4. 兜底返回标准路径
+    """
+    import re
     root = Path(project_dir)
 
-    # Python 项目检测
-    py_indicators = ["pyproject.toml", "setup.py", "setup.cfg"]
-    is_python = any((root / f).exists() for f in py_indicators)
-
-    # Java 项目检测
+    # 检查是否为 Java 项目
     java_indicators = ["pom.xml", "build.gradle", "build.gradle.kts"]
     is_java = any((root / f).exists() for f in java_indicators)
+    if not is_java:
+        return {"pages": "src/main/java", "tests": "src/test/java"}
 
-    if is_python or (not is_java and _has_python_src(root)):
-        return {
-            "component_aw": "aaw",
-            "pages": "pages",
-            "tests": "tests",
-        }
+    # 1. 尝试从 pom.xml 读取自定义源码目录
+    pom = root / "pom.xml"
+    if pom.exists():
+        try:
+            content = pom.read_text("utf-8")
+            src_match = re.search(r'<sourceDirectory>\s*([^<\s]+)\s*</sourceDirectory>', content)
+            test_match = re.search(r'<testSourceDirectory>\s*([^<\s]+)\s*</testSourceDirectory>', content)
+            pages = src_match.group(1) if src_match else None
+            tests = test_match.group(1) if test_match else None
+            if pages or tests:
+                if pages and tests:
+                    return {"pages": pages, "tests": tests}
+                if pages:
+                    tests = _infer_test_dir(root, pages)
+                    return {"pages": pages, "tests": tests or "src/test/java"}
+        except Exception:
+            pass
 
-    if is_java:
-        # Maven 标准布局
-        if (root / "src" / "main" / "java").exists():
-            return {
-                "pages": "src/main/java",
-                "tests": "src/test/java",
-            }
-        # Gradle / 其他 Java 布局
-        return {
-            "pages": "src/main/java",
-            "tests": "src/test/java",
-        }
+    # 2. 标准 Maven 布局
+    std_pages = root / "src" / "main" / "java"
+    std_tests = root / "src" / "test" / "java"
+    if std_pages.exists():
+        return {"pages": "src/main/java", "tests": "src/test/java"}
 
-    # Fallback：扫描常见目录
-    result = {}
-    for key, candidate in [("component_aw", "aaw"), ("pages", "pages"), ("tests", "tests")]:
-        if (root / candidate).exists():
-            result[key] = candidate
-    if not result:
-        result = {"pages": "src/main/java", "tests": "src/test/java"}
-    return result
+    # 3. 递归扫描 src/ 反推实际目录
+    detected = _scan_java_dirs(root)
+    if detected:
+        return detected
+
+    # 4. 兜底
+    return {"pages": "src/main/java", "tests": "src/test/java"}
 
 
-def _has_python_src(root: Path) -> bool:
-    """检查目录树中是否有 Python 源码（用于无 pyproject.toml 的项目）。"""
-    for pattern in ["**/*.py", "aaw/**/*.py", "pages/**/*.py", "tests/**/*.py"]:
-        if list(root.glob(pattern)):
-            return True
-    return False
+def _infer_test_dir(root: Path, src_dir: str) -> str | None:
+    """根据源码目录推断测试目录。"""
+    candidates = [
+        src_dir.replace("main", "test"),
+        "src/test/java",
+        "test",
+    ]
+    for c in candidates:
+        if (root / c).exists():
+            return c
+    return None
+
+
+def _scan_java_dirs(root: Path) -> dict[str, str] | None:
+    """扫描项目中实际 .java 文件的位置，反推源码目录。"""
+    src_root = root / "src"
+    if not src_root.exists():
+        return None
+    java_files = list(src_root.glob("**/*.java"))
+    if not java_files:
+        return None
+
+    # 找最深的公共父目录
+    candidate_dirs = set()
+    test_dirs = set()
+    for f in java_files:
+        rel = f.parent.relative_to(root)
+        parts = rel.parts
+        if "test" in parts or "tests" in parts:
+            test_dirs.add(str(rel))
+        else:
+            candidate_dirs.add(str(rel))
+
+    # 找公共前缀最短的目录（越短越接近源码根）
+    if candidate_dirs:
+        main_dir = _shortest_common(candidate_dirs)
+    else:
+        main_dir = "src/main/java"
+
+    if test_dirs:
+        test_dir = _shortest_common(test_dirs)
+    else:
+        test_dir = _infer_test_dir(root, main_dir) or "src/test/java"
+
+    return {"pages": main_dir, "tests": test_dir}
+
+
+def _shortest_common(paths: set[str]) -> str:
+    """找一组路径的最短公共父目录。"""
+    if not paths:
+        return "."
+    parts_list = [p.replace("\\", "/").split("/") for p in paths]
+    common = parts_list[0]
+    for p in parts_list[1:]:
+        i = 0
+        while i < min(len(common), len(p)) and common[i] == p[i]:
+            i += 1
+        common = common[:i]
+    return "/".join(common) if common else "."
 
 
 def _build_pipeline(adapter_config_path: Optional[str] = None):
@@ -129,10 +239,12 @@ def _build_pipeline(adapter_config_path: Optional[str] = None):
     return Pipeline(resolver, locator, recognizer, code_gen, data_fmt)
 
 
-# ── MCP Tools ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+# MCP Tools
+# ═══════════════════════════════════════════════════════════
 
 @mcp.tool()
-def analyze_page(
+async def analyze_page(
     url: str,
     adapter_config: Optional[str] = None,
 ) -> str:
@@ -141,25 +253,41 @@ def analyze_page(
     用于：在录制或生成测试之前，了解页面有哪些组件、它们叫什么、怎么定位。
     返回：JSON 格式的组件列表，每个组件包含 type/name/xpath/aria_role。
     """
-    from playwright.sync_api import sync_playwright
 
-    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter(adapter_config)
-    pipeline = _build_pipeline(adapter_config)
+    _validate_url(url)
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url)
-        page.wait_for_load_state("networkidle")
+    def _sync():
+        from playwright.sync_api import sync_playwright
 
-        components = pipeline.discover_components(page)
-        browser.close()
+        pipeline = _build_pipeline(adapter_config)
 
-    return json.dumps(components, indent=2, ensure_ascii=False)
+        pw = None
+        browser = None
+        try:
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_load_state("networkidle")
+            components = pipeline.discover_components(page)
+            return json.dumps(components, indent=2, ensure_ascii=False)
+        finally:
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            if pw:
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
+
+    return await _run_pw(_sync)
 
 
 @mcp.tool()
-def start_recording(
+async def start_recording(
     url: str = "about:blank",
     adapter_config: Optional[str] = None,
 ) -> str:
@@ -176,45 +304,22 @@ def start_recording(
     - url: 起始页面 URL
     返回：会话状态 JSON，含 session_id 和 url。
     """
-    global _active_recording
-    from playwright.sync_api import sync_playwright
 
-    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter(adapter_config)
-    pipeline = _build_pipeline(adapter_config)
+    _validate_url(url)
 
-    with _recording_lock:
-        # 如果已有活跃会话，先清理
-        if _active_recording:
-            try:
-                _active_recording["browser"].close()
-            except Exception:
-                pass
-            try:
-                _active_recording["pw"].stop()
-            except Exception:
-                pass
-            if _active_recording.get("_timeout_timer"):
-                _active_recording["_timeout_timer"].cancel()
+    def _sync():
+        global _active_recording
+        from playwright.sync_api import sync_playwright
 
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(headless=False)
-        context = browser.new_context(viewport={"width": 1280, "height": 800})
-        page = context.new_page()
-        page.goto(url)
+        pipeline = _build_pipeline(adapter_config)
 
-        session = pipeline.record(page)
-
-        # 10 分钟超时保护：如果用户忘记停止录制，自动清理
-        _this_session = None
-
-        def _auto_stop():
+        pw = None
+        browser = None
+        timer = None
+        try:
             with _recording_lock:
-                nonlocal _this_session
-                if _active_recording is not None and _active_recording.get("session") is _this_session:
-                    try:
-                        _active_recording["session"].stop()
-                    except Exception:
-                        pass
+                # 如果已有活跃会话，先清理
+                if _active_recording:
                     try:
                         _active_recording["browser"].close()
                     except Exception:
@@ -223,31 +328,80 @@ def start_recording(
                         _active_recording["pw"].stop()
                     except Exception:
                         pass
-                    _active_recording = None
+                    if _active_recording.get("_timeout_timer"):
+                        _active_recording["_timeout_timer"].cancel()
 
-        timer = threading.Timer(600, _auto_stop)
-        timer.daemon = True
-        timer.start()
+                pw = sync_playwright().start()
+                browser = pw.chromium.launch(headless=False)
+                context = browser.new_context(viewport={"width": 1280, "height": 800})
+                page = context.new_page()
+                page.goto(url)
 
-        _active_recording = {
-            "session": session,
-            "page": page,
-            "browser": browser,
-            "pw": pw,
-            "_timeout_timer": timer,
-        }
-        _this_session = session
+                session = pipeline.record(page)
 
-    return json.dumps({
-        "status": "recording",
-        "session_id": "active",
-        "url": url,
-        "hint": "用户在浏览器中操作。完成后 Agent 调用 stop_recording。",
-    }, indent=2, ensure_ascii=False)
+                # 10 分钟超时保护
+                def _auto_stop():
+                    with _recording_lock:
+                        if _active_recording is not None:
+                            try:
+                                _active_recording["session"].stop()
+                            except Exception:
+                                pass
+                            try:
+                                _active_recording["browser"].close()
+                            except Exception:
+                                pass
+                            try:
+                                _active_recording["pw"].stop()
+                            except Exception:
+                                pass
+                            if _active_recording.get("_timeout_timer"):
+                                _active_recording["_timeout_timer"].cancel()
+                            _active_recording = None
+
+                timer = threading.Timer(600, _auto_stop)
+                timer.daemon = True
+                timer.start()
+
+                _active_recording = {
+                    "session": session,
+                    "page": page,
+                    "browser": browser,
+                    "pw": pw,
+                    "_timeout_timer": timer,
+                }
+
+            return json.dumps({
+                "status": "recording",
+                "session_id": "active",
+                "url": url,
+                "hint": "用户在浏览器中操作。完成后 Agent 调用 stop_recording。",
+            }, indent=2, ensure_ascii=False)
+        except Exception:
+            if timer:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            if pw:
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
+            with _recording_lock:
+                _active_recording = None
+            raise
+
+    return await _run_pw(_sync)
 
 
 @mcp.tool()
-def stop_recording(
+async def stop_recording(
     output_file: str = "recording.json",
 ) -> str:
     """停止当前活跃的录制会话，保存录制文件，关闭浏览器。
@@ -259,40 +413,64 @@ def stop_recording(
     - output_file: 录制输出文件路径，默认 recording.json
     返回：录制结果摘要（步骤数、文件路径、每步简要描述）。
     """
-    global _active_recording
 
-    with _recording_lock:
-        if not _active_recording:
-            return json.dumps({
-                "error": "没有活跃的录制会话。请先调用 start_recording。",
-            }, indent=2, ensure_ascii=False)
+    def _sync():
+        global _active_recording
 
-        session = _active_recording["session"]
-        browser = _active_recording["browser"]
-        pw = _active_recording["pw"]
+        with _recording_lock:
+            if not _active_recording:
+                return json.dumps({
+                    "error": "没有活跃的录制会话。请先调用 start_recording。",
+                }, indent=2, ensure_ascii=False)
 
-        recording = session.stop()
+            # 先取消超时定时器，防止与正常 stop 并发
+            timer = _active_recording.get("_timeout_timer")
+            if timer:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
 
-        output_path = Path(output_file)
+            session = _active_recording["session"]
+            browser = _active_recording["browser"]
+            pw = _active_recording["pw"]
+            _active_recording = None
+
+        recording = None
+        try:
+            recording = session.stop()
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            try:
+                pw.stop()
+            except Exception:
+                pass
+
+        if recording is None:
+            return json.dumps({"error": "录制停止失败。"}, indent=2, ensure_ascii=False)
+
+        output_path = _sanitize_output_path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
             json.dumps(recording.to_dict(), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
-        browser.close()
-        pw.stop()
-        _active_recording = None
+        return json.dumps({
+            "status": "ok",
+            "steps": len(recording.steps),
+            "file": str(output_path.absolute()),
+            "summary": [f"{s.action.value}: {s.target.label or s.target.url or ''}" for s in recording.steps],
+        }, indent=2, ensure_ascii=False)
 
-    return json.dumps({
-        "status": "ok",
-        "steps": len(recording.steps),
-        "file": str(output_path.absolute()),
-        "summary": [f"{s.action.value}: {s.target.label or s.target.url or ''}" for s in recording.steps],
-    }, indent=2, ensure_ascii=False)
+    return await _run_pw(_sync)
 
 
 @mcp.tool()
-def record_browser_operations(
+async def record_browser_operations(
     url: str = "about:blank",
     output_file: str = "recording.json",
     adapter_config: Optional[str] = None,
@@ -307,28 +485,15 @@ def record_browser_operations(
     - output_file: 录制输出文件路径，默认 recording.json
     返回：录制结果摘要。
     """
-    global _active_recording
-
-    # 使用交互式两步工具完成录制（阻塞等待 stdin）
-    start_result = json.loads(start_recording(url=url, adapter_config=adapter_config))
-    if start_result.get("status") != "recording":
-        return json.dumps({"error": "启动录制失败", "detail": start_result})
-
-    try:
-        input("\n[uibridge] 浏览器已打开。请在浏览器中操作，完成后按 Enter 结束录制...\n")
-    except (EOFError, OSError):
-        # stdin 不可用（MCP 场景），返回提示让 Agent 用两步工具
-        stop_recording(output_file=output_file)
-        return json.dumps({
-            "error": "此工具在 MCP 模式下不可用。请使用 start_recording + stop_recording 两步工具。",
-            "hint": "录制会话已自动停止。",
-        })
-
-    return stop_recording(output_file=output_file)
+    # 此工具在 MCP 模式下无法使用（需要 stdin 交互 + 单线程 executor 会死锁）
+    return json.dumps({
+        "error": "此工具仅在 CLI 模式下可用。MCP 模式请使用 start_recording + stop_recording 两步工具。",
+        "hint": "先调用 start_recording(url=...) 打开浏览器，用户操作完成后调用 stop_recording()。",
+    }, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
-def generate_test_code(
+async def generate_test_code(
     input_file: str = "recording.json",
     output_dir: str = "generated",
     adapter_config: Optional[str] = None,
@@ -345,7 +510,14 @@ def generate_test_code(
     """
     from uibridge.engine.ir.raw_recording import RawRecording
 
-    data = json.loads(Path(input_file).read_text("utf-8"))
+    input_path = Path(input_file)
+    if not input_path.exists():
+        return json.dumps({
+            "error": f"录制文件不存在: {input_file}",
+            "hint": "请先录制浏览器操作（start_recording → 用户操作 → stop_recording）",
+        }, indent=2, ensure_ascii=False)
+
+    data = json.loads(input_path.read_text("utf-8"))
     recording = RawRecording.from_dict(data)
 
     pipeline = _build_pipeline(adapter_config)
@@ -354,7 +526,7 @@ def generate_test_code(
     call_seq = pipeline.map_to_framework(semantic)
     results = pipeline.generate_and_verify(call_seq, recording)
 
-    out_dir = Path(output_dir)
+    out_dir = _sanitize_output_path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     output = []
@@ -380,7 +552,7 @@ def generate_test_code(
 
 
 @mcp.tool()
-def diff_snapshots(
+async def diff_snapshots(
     input_file: str = "recording.json",
     adapter_config: Optional[str] = None,
 ) -> str:
@@ -394,7 +566,14 @@ def diff_snapshots(
     """
     from uibridge.engine.ir.raw_recording import RawRecording
 
-    data = json.loads(Path(input_file).read_text("utf-8"))
+    input_path = Path(input_file)
+    if not input_path.exists():
+        return json.dumps({
+            "error": f"录制文件不存在: {input_file}",
+            "hint": "请先录制浏览器操作（start_recording → 用户操作 → stop_recording）",
+        }, indent=2, ensure_ascii=False)
+
+    data = json.loads(input_path.read_text("utf-8"))
     recording = RawRecording.from_dict(data)
 
     pipeline = _build_pipeline(adapter_config)
@@ -407,7 +586,7 @@ def diff_snapshots(
 
 
 @mcp.tool()
-def seed_knowledge_base(
+async def seed_knowledge_base(
     project_dir: str,
 ) -> str:
     """从企业项目的源码目录提取知识，播种知识库。
@@ -439,7 +618,7 @@ def seed_knowledge_base(
 
 
 @mcp.tool()
-def query_knowledge_base(
+async def query_knowledge_base(
     query: str,
     project_dir: str = ".",
 ) -> str:

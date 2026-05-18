@@ -68,28 +68,38 @@ class Pipeline:
         current_scenario_steps = []
         current_page = ""
         page_flow = []
+        # 空闲间隔阈值（毫秒）：超过此间隔视为新场景
+        IDLE_GAP_MS = 5000
+        last_ts = 0
 
         for step in recording.steps:
             action = step.action if isinstance(step.action, ActionType) else ActionType(step.action)
+            ts = step.timestamp_ms or 0
 
-            if action == ActionType.NAVIGATE:
+            # NAVIGATE / TAB_SWITCH 总是场景边界
+            is_boundary = action in (ActionType.NAVIGATE, ActionType.TAB_SWITCH)
+            # 空闲间隔超过阈值也视为边界（纯点击 SPA 场景）
+            if not is_boundary and last_ts > 0 and ts > last_ts and (ts - last_ts) > IDLE_GAP_MS:
+                is_boundary = True
+
+            if is_boundary:
                 if current_scenario_steps:
                     scenarios.append(self._build_scenario(
                         current_scenario_steps, current_page, page_flow
                     ))
                     current_scenario_steps = []
+
+            if action == ActionType.NAVIGATE:
                 url = step.target.url if step.target else ""
                 current_page = self._infer_page_name(url)
                 page_flow = [current_page]
                 current_scenario_steps.append(step)
             elif action == ActionType.TAB_SWITCH:
-                if current_scenario_steps:
-                    scenarios.append(self._build_scenario(
-                        current_scenario_steps, current_page, page_flow
-                    ))
-                    current_scenario_steps = []
+                pass  # TAB_SWITCH 只做边界，不加入步骤
             else:
                 current_scenario_steps.append(step)
+
+            last_ts = ts
 
         if current_scenario_steps:
             scenarios.append(self._build_scenario(
@@ -422,7 +432,11 @@ class Pipeline:
         return safe or "unnamed"
 
     def _resolve_package_from_kb(self) -> str:
-        """从 KB 高置信度条目中提取基础包名（所有包的公共前缀）"""
+        """从 KB 或源码扫描提取基础包名（所有包的公共前缀）。
+
+        返回 "" 表示无法检测（将使用适配器默认值），
+        返回非空字符串为检测到的包名。
+        """
         if not self.kb_manager:
             return ""
         packages: list[str] = []
@@ -439,21 +453,26 @@ class Pipeline:
                                 pkg = class_parts[0]
                     if pkg:
                         packages.append(pkg)
-        if not packages:
-            return ""
-        # 找所有包名的公共前缀
-        if len(packages) == 1:
-            return packages[0]
-        common = packages[0].split(".")
-        for pkg in packages[1:]:
-            parts = pkg.split(".")
-            i = 0
-            while i < len(common) and i < len(parts) and common[i] == parts[i]:
-                i += 1
-            common = common[:i]
-            if not common:
-                return max(set(packages), key=packages.count)
-        return ".".join(common)
+        if packages:
+            if len(packages) == 1:
+                return packages[0]
+            common = packages[0].split(".")
+            for pkg in packages[1:]:
+                parts = pkg.split(".")
+                i = 0
+                while i < len(common) and i < len(parts) and common[i] == parts[i]:
+                    i += 1
+                common = common[:i]
+                if not common:
+                    return max(set(packages), key=packages.count)
+            return ".".join(common)
+
+        # KB 无结果时，扫描源码兜底
+        from .adapter.base import scan_java_source_for_package
+        result = scan_java_source_for_package(str(self.kb_manager.project_root))
+        if result is not None:
+            return result
+        return ""
 
     def _apply_kb_imports(self, imports: set[str]) -> set[str]:
         """用 KB 中的实际包名替换 import 中的硬编码默认值。

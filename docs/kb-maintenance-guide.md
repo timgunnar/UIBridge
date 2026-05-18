@@ -68,9 +68,8 @@ Agent：调用 seed_knowledge_base(project_dir=".")
 python -c "
 from uibridge.kb.kb_manager import KBManager
 kb = KBManager(project_root='.')
-kb.seed_from_source_dirs(['src/main/java/**/pages/', 'src/test/java/**/tests/'])
-kb.persist()
-print('KB seeded:', kb.summary())
+kb.seed_from_static_analysis({'pages': 'src/main/java/pages/', 'tests': 'src/test/java/tests/'})
+print('KB seeded:', kb.summarize_kb())
 "
 ```
 

@@ -77,7 +77,7 @@ RECORDER_JS = r"""
         window.__uibridge_report('dblclick', JSON.stringify(d));
     }, true);
 
-    // ── 输入 / 选择变更 ───────────────────────
+    // ── 输入 / 选择变更（捕获阶段以穿透 Shadow DOM）──
     document.addEventListener('change', (e) => {
         const el = e.target;
         if (!visible(el)) return;
@@ -187,6 +187,12 @@ RECORDER_JS = r"""
         _report_url_change();
     };
 
+    // Turbolinks / Turbo 导航检测
+    document.addEventListener('turbolinks:load', _report_url_change, true);
+    document.addEventListener('turbo:load', _report_url_change, true);
+    document.addEventListener('turbolinks:visit', _report_url_change, true);
+    document.addEventListener('turbo:visit', _report_url_change, true);
+
     // ── MutationObserver：动态内容变化 ─────────
     const _mo = new MutationObserver((mutations) => {
         let added = 0, removed = 0, attr_changed = 0;
@@ -200,14 +206,51 @@ RECORDER_JS = r"""
             window.__uibridge_report('mutation', JSON.stringify(summary));
         }
     });
-    _mo.observe(document.body || document.documentElement, {
-        childList: true, subtree: true, attributes: true,
-        attributeFilter: ['class', 'style', 'disabled', 'aria-expanded', 'aria-selected', 'hidden'],
-    });
+    // 优先观察 documentElement（始终存在），body 异步就绪后再追加
+    function _start_observing() {
+        const target = document.body || document.documentElement;
+        _mo.observe(target, {
+            childList: true, subtree: true, attributes: true,
+            attributeFilter: ['class', 'style', 'disabled', 'aria-expanded', 'aria-selected', 'hidden'],
+        });
+        if (!document.body) {
+            // body 尚未就绪，轮询等待
+            const _check = setInterval(() => {
+                if (document.body) {
+                    clearInterval(_check);
+                    _mo.observe(document.body, {
+                        childList: true, subtree: true, attributes: true,
+                        attributeFilter: ['class', 'style', 'disabled', 'aria-expanded', 'aria-selected', 'hidden'],
+                    });
+                }
+            }, 50);
+            setTimeout(() => clearInterval(_check), 10000); // 超时保护
+        }
+    }
+    _start_observing();
 
-    // ── 布局信息采集（供快照位置对比）─────────
+    // ── Shadow DOM 辅助：遍历所有 shadow root 执行查询 ──
+    function _query_all_deep(root, selector) {
+        const results = [];
+        try {
+            const els = root.querySelectorAll(selector);
+            for (const el of els) results.push(el);
+        } catch(e) {}
+        // 递归遍历 shadow roots
+        const all_els = root.querySelectorAll('*');
+        for (const el of all_els) {
+            if (el.shadowRoot) {
+                const deep = _query_all_deep(el.shadowRoot, selector);
+                for (const d of deep) results.push(d);
+            }
+        }
+        return results;
+    }
+
+    // ── 布局信息采集（供快照位置对比，含 Shadow DOM）──
     window.__uibridge_get_layout = function(selector) {
-        const els = document.querySelectorAll(selector || '[id],[data-testid],[data-module],[role],button,input,select,textarea,table,[aria-label]');
+        const q = selector || '[id],[data-testid],[data-module],[role],button,input,select,textarea,table,[aria-label]';
+        const els = _query_all_deep(document, q);
         const result = {};
         const seen = new Set();
         for (const el of els) {
@@ -243,6 +286,8 @@ class RecordingSession:
         self._active = True
         self._lock = threading.Lock()
         self._spa_nav_pending = False
+        # 在初始化时（安全线程）捕获当前 URL，避免后续在 transport 线程访问 page.url
+        self._current_url = page.url
         self.runtime: RuntimeAnalyzer | None = None
         self.runtime_report: RuntimeReport | None = None
         if enable_runtime:
@@ -348,7 +393,7 @@ class RecordingSession:
                 self.steps.append(RawStep(
                     id=self._step_id(),
                     action=ActionType.SCROLL,
-                    target=Target(url=data.get("url", self.page.url)),
+                    target=Target(url=data.get("url", self._current_url)),
                     value=json.dumps({"x": data.get("x", 0), "y": data.get("y", 0)}),
                     timestamp_ms=self._ts(),
                     before_snapshot_id=snap_id,
@@ -393,7 +438,7 @@ class RecordingSession:
                 self.steps.append(RawStep(
                     id=self._step_id(),
                     action=ActionType.MUTATION,
-                    target=Target(url=data.get("url", self.page.url)),
+                    target=Target(url=data.get("url", self._current_url)),
                     value=json.dumps({
                         "added": data.get("added", 0),
                         "removed": data.get("removed", 0),
@@ -417,6 +462,7 @@ class RecordingSession:
             return
 
         url = data.get("url", self.page.url)
+        self._current_url = url
         snap = self._capture_snapshot()
 
         with self._lock:
@@ -438,6 +484,7 @@ class RecordingSession:
             return
         if frame != self.page.main_frame:
             return
+        self._current_url = self.page.url
         snap = self._capture_snapshot()
         with self._lock:
             if not self._active:
@@ -445,7 +492,7 @@ class RecordingSession:
             self.steps.append(RawStep(
                 id=self._step_id(),
                 action=ActionType.NAVIGATE,
-                target=Target(url=self.page.url),
+                target=Target(url=self._current_url),
                 timestamp_ms=self._ts(),
                 after_snapshot_id=snap.id,
             ))
@@ -457,14 +504,30 @@ class RecordingSession:
         except Exception:
             pass
         try:
+            frame.add_init_script(RECORDER_JS)
+        except Exception:
+            pass
+        try:
             frame.evaluate(RECORDER_JS)
         except Exception:
             pass
 
     def _on_popup(self, popup):
-        """新标签页/窗口检测"""
+        """新标签页/窗口检测 — 注入录制桥接以便在新标签页中继续录制"""
         if not self._active:
             return
+        try:
+            popup.expose_binding("__uibridge_report", self._handle_js_event)
+        except Exception:
+            pass
+        try:
+            popup.add_init_script(RECORDER_JS)
+        except Exception:
+            pass
+        try:
+            popup.evaluate(RECORDER_JS)
+        except Exception:
+            pass
         with self._lock:
             self.steps.append(RawStep(
                 id=self._step_id(),
@@ -488,7 +551,7 @@ class RecordingSession:
             ),
             label=data.get("label", "")[:50],
             tag=data.get("tag", ""),
-            url=data.get("url", self.page.url),
+            url=data.get("url", self._current_url),
         )
 
     # ── 快照管理（在安全的时机调用）───────────
@@ -502,27 +565,35 @@ class RecordingSession:
     def _capture_snapshot(self) -> Snapshot:
         self._snap_counter += 1
         snap_id = f"snap-{self._snap_counter:03d}"
+        errors = []
         try:
             aria = self.page.locator("html").aria_snapshot()
-        except Exception:
+        except Exception as e:
             aria = ""
+            errors.append(f"aria_snapshot: {e}")
         try:
             title = self.page.title()
-        except Exception:
+        except Exception as e:
             title = ""
+            errors.append(f"title: {e}")
         try:
             layout_raw = self.page.evaluate("window.__uibridge_get_layout && window.__uibridge_get_layout()")
             layout_info = layout_raw if isinstance(layout_raw, str) else json.dumps(layout_raw or {})
-        except Exception:
+        except Exception as e:
             layout_info = "{}"
+            errors.append(f"layout: {e}")
+        url = self.page.url
+        self._current_url = url
         snapshot = Snapshot(
             id=snap_id,
-            url=self.page.url,
+            url=url,
             title=title,
             aria_snapshot=aria,
             layout_info=layout_info,
             timestamp_ms=self._ts(),
         )
+        if errors:
+            snapshot.error = "; ".join(errors)
         self.snapshots[snap_id] = snapshot
         return snapshot
 

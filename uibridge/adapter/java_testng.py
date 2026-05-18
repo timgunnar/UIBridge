@@ -1,6 +1,8 @@
 """Java TestNG 适配器 — Java + TestNG + Maven + Page Object 模式"""
 
 import re
+from pathlib import Path
+from typing import Optional
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
@@ -9,6 +11,7 @@ from .base import (
     BAWDef, BAWOperationDef, CallDef,
     ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
+    scan_java_source_for_package,
 )
 
 
@@ -341,13 +344,70 @@ class JavaActionRecognizer(ActionRecognizer):
 class JavaCodeGenerator(CodeGenerator):
     """生成 Java + TestNG/JUnit5 + Selenium 风格代码"""
 
-    def __init__(self, kb_manager=None, package_name: str = "com.acme",
+    def __init__(self, kb_manager=None, package_name: Optional[str] = None,
                  base_page_class: str = "BasePage", test_framework: str = "testng"):
         self.kb = kb_manager
-        self.package = package_name
+        if package_name is not None:
+            self.package = package_name
+        else:
+            pkg = self._resolve_package()
+            if pkg is None:
+                self.package = "com.acme"
+            else:
+                self.package = pkg  # "" 表示默认包
         self.base_page = base_page_class
         self.test_framework = test_framework  # "testng" | "junit5" | "junit4"
         self._detect_framework()
+
+    def _resolve_package(self) -> Optional[str]:
+        """从 KB 或源码扫描检测项目包名。
+
+        返回值：
+        - 包名字符串：检测到统一包名
+        - ""（空字符串）：默认包（无 package 声明）
+        - None：无法检测
+        """
+        packages: set[str] = set()
+        if self.kb:
+            for item in self.kb.store.list_category("conventions"):
+                if "package" in item.key:
+                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
+                    if pkg:
+                        packages.add(pkg)
+            if not packages:
+                for item in self.kb.store.list_category("components"):
+                    key = item.key
+                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
+                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
+                        if len(pkg_parts) > 1:
+                            packages.add(pkg_parts[0])
+            if packages:
+                parts_list = [p.split(".") for p in packages]
+                common = parts_list[0]
+                for p in parts_list[1:]:
+                    i = 0
+                    while i < min(len(common), len(p)) and common[i] == p[i]:
+                        i += 1
+                    common = common[:i]
+                if common:
+                    return ".".join(common)
+
+        # 源码扫描兜底
+        if self.kb and hasattr(self.kb, 'project_root'):
+            result = scan_java_source_for_package(str(self.kb.project_root))
+            if result is not None:
+                return result
+
+        return None
+
+    def _post_process(self, code: str) -> str:
+        """后处理：默认包时移除 package 行和项目内 import。"""
+        if self.package:
+            return code
+        code = re.sub(r'^\s*package\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
+        code = re.sub(r'^\s*import\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
+        code = re.sub(r'\n{3,}', '\n\n', code)
+        return code.strip() + '\n'
 
     def _detect_framework(self):
         """从 KB 或项目源码自动检测测试框架"""
@@ -378,13 +438,13 @@ class JavaCodeGenerator(CodeGenerator):
         env = Environment(loader=BaseLoader())
         env.filters["repr"] = lambda v: repr(v)
         template = env.from_string(JAVA_COMPONENT_TEMPLATE)
-        return template.render(comp=comp_def, package=self.package)
+        return self._post_process(template.render(comp=comp_def, package=self.package))
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
         from jinja2 import Environment, BaseLoader
         env = Environment(loader=BaseLoader())
         template = env.from_string(JAVA_PAGE_OBJECT_TEMPLATE)
-        return template.render(baw=baw_def, package=self.package)
+        return self._post_process(template.render(baw=baw_def, package=self.package))
 
     def generate_test_script(self, script_def: ScriptDef) -> str:
         from jinja2 import Environment, BaseLoader
@@ -393,15 +453,15 @@ class JavaCodeGenerator(CodeGenerator):
             template = env.from_string(JAVA_JUNIT5_TEMPLATE)
         else:
             template = env.from_string(JAVA_TESTNG_TEMPLATE)
-        return template.render(s=script_def, package=self.package,
-                               framework=self.test_framework)
+        return self._post_process(template.render(s=script_def, package=self.package,
+                               framework=self.test_framework))
 
     def generate_test_data(self, data_def: TestDataDef) -> str:
         from jinja2 import Environment, BaseLoader
         env = Environment(loader=BaseLoader())
         env.filters["repr"] = lambda v: repr(v)
         template = env.from_string(JAVA_TEST_DATA_TEMPLATE)
-        return template.render(d=data_def)
+        return self._post_process(template.render(d=data_def, package=self.package))
 
     def get_import_style(self) -> ImportStyle:
         is_junit5 = self.test_framework == "junit5"
@@ -498,9 +558,50 @@ class JavaCodeGenerator(CodeGenerator):
 class JavaDataFormatter(DataFormatter):
     """录制值 → Java 测试数据常量类"""
 
-    def __init__(self, kb_manager=None, package_name: str = "com.acme"):
+    def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
-        self.package = package_name
+        if package_name is not None:
+            self.package = package_name
+        else:
+            pkg = self._resolve_package()
+            if pkg is None:
+                self.package = "com.acme"
+            else:
+                self.package = pkg
+
+    def _resolve_package(self) -> Optional[str]:
+        """从 KB 或源码扫描检测项目包名。"""
+        packages: set[str] = set()
+        if self.kb:
+            for item in self.kb.store.list_category("conventions"):
+                if "package" in item.key:
+                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
+                    if pkg:
+                        packages.add(pkg)
+            if not packages:
+                for item in self.kb.store.list_category("components"):
+                    key = item.key
+                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
+                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
+                        if len(pkg_parts) > 1:
+                            packages.add(pkg_parts[0])
+            if packages:
+                parts_list = [p.split(".") for p in packages]
+                common = parts_list[0]
+                for p in parts_list[1:]:
+                    i = 0
+                    while i < min(len(common), len(p)) and common[i] == p[i]:
+                        i += 1
+                    common = common[:i]
+                if common:
+                    return ".".join(common)
+
+        if self.kb and hasattr(self.kb, 'project_root'):
+            result = scan_java_source_for_package(str(self.kb.project_root))
+            if result is not None:
+                return result
+
+        return None
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
         domain = data_context.get("domain", "unknown")
@@ -509,15 +610,21 @@ class JavaDataFormatter(DataFormatter):
         for key, value in captured_values.items():
             java_type = self._infer_java_type(value)
             fields[key] = {"value": value, "type": java_type}
+        if self.package:
+            pkg_path = self.package.replace('.', '/') + '/'
+        else:
+            pkg_path = ''
         return TestDataDef(
-            file_path=f"src/test/java/{self.package.replace('.', '/')}/data/{class_name}.java",
+            file_path=f"src/test/java/{pkg_path}data/{class_name}.java",
             variable_name=class_name,
             fields=fields,
         )
 
     def get_data_ref_style(self, domain: str) -> str:
         class_name = f"{self._java_class_name(domain)}TestData"
-        return f"import {self.package}.data.{class_name};"
+        if self.package:
+            return f"import {self.package}.data.{class_name};"
+        return f"import data.{class_name};"
 
     def _java_class_name(self, name: str) -> str:
         parts = re.split(r'[-_\s]', name)

@@ -122,6 +122,25 @@ class SelfTestRunner:
         test_file.unlink(missing_ok=True)
         return result
 
+    def _find_java_jars(self) -> list[str]:
+        """Search for Selenium and TestNG JARs in common locations."""
+        import glob
+        jars = []
+        # Maven local repository
+        m2 = Path.home() / ".m2" / "repository"
+        if m2.exists():
+            for pattern in [
+                "org/seleniumhq/selenium/**/selenium-*.jar",
+                "org/testng/testng/**/testng-*.jar",
+                "org/seleniumhq/selenium/**/selenium-api-*.jar",
+                "org/seleniumhq/selenium/**/selenium-support-*.jar",
+            ]:
+                for jar in m2.glob(pattern):
+                    if not any(k in str(jar) for k in ("sources", "javadoc")):
+                        jars.append(str(jar))
+        # pip-installed Playwright Java bindings (for completeness)
+        return jars
+
     def _run_java_direct(self, code: str, test_name: str, start: float) -> SelfTestResult:
         """使用 javac 编译 + java 运行 TestNG 测试（无需 Maven）"""
         tmp_dir = Path(tempfile.gettempdir()) / f"uibridge_java_{test_name}"
@@ -134,17 +153,24 @@ class SelfTestRunner:
         stderr = ""
 
         try:
-            # 1. 编译
+            # 1. 查找依赖 JAR
+            extra_jars = self._find_java_jars()
+            cp_parts = [str(tmp_dir)] + extra_jars
+            classpath = os.pathsep.join(cp_parts) if os.name == "nt" else ":".join(cp_parts)
+
+            # 2. 编译 (带 classpath)
+            compile_cmd = ["javac", "-cp", classpath, str(test_file)]
             compile_proc = subprocess.run(
-                ["javac", str(test_file)],
+                compile_cmd,
                 capture_output=True, text=True, timeout=30,
                 encoding="utf-8", errors="replace",
             )
             if compile_proc.returncode != 0:
                 stderr = f"Compilation failed:\n{compile_proc.stderr}"
+                if extra_jars:
+                    stderr += f"\nClasspath used: {classpath}"
             else:
-                # 2. 执行：java -cp <tmp_dir> org.testng.TestNG -testclass <test_name>
-                classpath = str(tmp_dir)
+                # 3. 执行：java -cp <classpath> org.testng.TestNG -testclass <test_name>
                 run_proc = subprocess.run(
                     ["java", "-cp", classpath, "org.testng.TestNG", "-testclass", test_name],
                     capture_output=True, text=True, timeout=self.timeout,
@@ -155,6 +181,8 @@ class SelfTestRunner:
                     passed = True
                 else:
                     stderr = run_proc.stderr or run_proc.stdout
+                    if extra_jars:
+                        stderr += f"\nClasspath used: {classpath}"
         except FileNotFoundError as e:
             missing = "javac" if "javac" in str(e) else "java" if "java" in str(e) else "TestNG"
             stderr = f"{missing} not found. Install JDK and TestNG JAR, or use mvn test path."
@@ -287,6 +315,48 @@ class SelfTestRunner:
         # Rule 5: Generic — try adding a standard test framework import
         if language == "python" and "pytest" not in code and "import pytest" not in code:
             return ("import pytest\n\n" + code, "added pytest import")
+
+        # Rule 6: Java — missing @Test annotation
+        if language == "java" and "no test methods" in combined.lower():
+            if "@Test" not in code and "import org.testng.annotations.Test" in code:
+                # Add @Test before the first public void method
+                import re
+                fixed = re.sub(r'(\s+)(public void \w+\()', r'\1@Test\n\1\2', code, count=1)
+                if fixed != code:
+                    return (fixed, "added @Test annotation")
+
+        # Rule 7: Java — missing tearDown/quit in page object
+        if language == "java" and "NullPointerException" in combined:
+            if "driver.quit()" not in code and "tearDown" not in code:
+                lines = code.split("\n")
+                # Find the last } and add tearDown before it
+                if lines and "}" in lines[-1]:
+                    teardown = [
+                        "",
+                        "    @AfterMethod",
+                        "    public void tearDown() {",
+                        "        if (driver != null) {",
+                        "            driver.quit();",
+                        "        }",
+                        "    }",
+                    ]
+                    new_lines = lines[:-1] + teardown + [lines[-1]]
+                    return ("\n".join(new_lines), "added tearDown for driver cleanup")
+
+        # Rule 8: Python — missing self parameter
+        if language == "python" and "takes 0 positional arguments" in combined:
+            import re
+            fixed = re.sub(r'def (\w+)\(\):', r'def \1(self):', code)
+            if fixed != code:
+                return (fixed, "added self parameter")
+
+        # Rule 9: Syntax error — try basic fixes
+        if language == "python" and "SyntaxError" in combined:
+            # Fix missing colon after def/class/if/for
+            import re
+            fixed = re.sub(r'(def \w+\([^)]*\))(\s*\n)', r'\1:\2', code)
+            if fixed != code:
+                return (fixed, "fixed missing colon in function definition")
 
         return (code, "")
 

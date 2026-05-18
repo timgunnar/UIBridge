@@ -21,15 +21,32 @@ class ReferenceComponentResolver(ComponentResolver):
 
     # Hardcoded defaults — used when KB is not available
     ARIA_MAP = {
+        # 数据展示
         "table": "TableAW", "grid": "TableAW", "treegrid": "TableAW",
-        "form": "FormAW", "dialog": "DialogAW",
+        "row": "TableRowAW", "cell": "TableCellAW", "gridcell": "TableCellAW",
+        # 表单
+        "form": "FormAW",
+        "textbox": "InputAW", "searchbox": "InputAW", "spinbutton": "SpinnerAW",
+        "checkbox": "CheckboxAW", "radio": "RadioAW", "switch": "ToggleAW",
         "combobox": "DropdownAW", "listbox": "DropdownAW",
+        "slider": "SliderAW",
+        "option": "OptionAW",
+        # 导航
         "menu": "MenuAW", "menubar": "MenuAW",
-        "tablist": "TabAW", "tree": "TreeAW",
-        "navigation": "NavAW",
-        "button": "ButtonAW", "link": "LinkAW",
-        "textbox": "InputAW", "searchbox": "InputAW",
-        "checkbox": "CheckboxAW", "radio": "RadioAW",
+        "tablist": "TabAW", "tab": "TabAW",
+        "tree": "TreeAW", "treeitem": "TreeItemAW",
+        "navigation": "NavAW", "link": "LinkAW", "button": "ButtonAW",
+        # 反馈
+        "dialog": "DialogAW", "alert": "AlertAW", "alertdialog": "DialogAW",
+        "banner": "BannerAW", "tooltip": "TooltipAW",
+        "progressbar": "ProgressAW", "status": "StatusAW",
+        "log": "LogAW", "timer": "TimerAW",
+        # 结构
+        "region": "RegionAW", "group": "GroupAW",
+        "list": "ListAW", "listitem": "ListItemAW",
+        "separator": "SeparatorAW",
+        "img": "ImageAW", "heading": "HeadingAW",
+        "main": "MainAW", "contentinfo": "FooterAW",
     }
 
     METHOD_TEMPLATES = {
@@ -99,6 +116,106 @@ class ReferenceComponentResolver(ComponentResolver):
         "RadioAW": [
             MethodTemplate("select", [{"name": "value", "type": "str"}], "click"),
             MethodTemplate("get_selected", [], "read", "str"),
+        ],
+        "SliderAW": [
+            MethodTemplate("set_value", [{"name": "value", "type": "float"}], "input"),
+            MethodTemplate("get_value", [], "read", "float"),
+        ],
+        "SpinnerAW": [
+            MethodTemplate("set_value", [{"name": "value", "type": "int"}], "input"),
+            MethodTemplate("increment", [], "click"),
+            MethodTemplate("decrement", [], "click"),
+            MethodTemplate("get_value", [], "read", "int"),
+        ],
+        "ToggleAW": [
+            MethodTemplate("toggle", [], "click"),
+            MethodTemplate("is_on", [], "read", "bool"),
+            MethodTemplate("assert_on", [], "assertion"),
+            MethodTemplate("assert_off", [], "assertion"),
+        ],
+        "OptionAW": [
+            MethodTemplate("select", [], "click"),
+            MethodTemplate("is_selected", [], "read", "bool"),
+        ],
+        "TreeItemAW": [
+            MethodTemplate("expand", [], "click"),
+            MethodTemplate("collapse", [], "click"),
+            MethodTemplate("click", [], "click"),
+        ],
+        "AlertAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("dismiss", [], "click"),
+        ],
+        "BannerAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("assert_visible", [], "assertion"),
+        ],
+        "TooltipAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("assert_visible", [], "assertion"),
+        ],
+        "ProgressAW": [
+            MethodTemplate("get_value", [], "read", "float"),
+            MethodTemplate("assert_complete", [], "assertion"),
+        ],
+        "StatusAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("assert_contains", [{"name": "text", "type": "str"}], "assertion"),
+        ],
+        "LogAW": [
+            MethodTemplate("get_entries", [], "read", "list"),
+            MethodTemplate("assert_contains", [{"name": "text", "type": "str"}], "assertion"),
+        ],
+        "TimerAW": [
+            MethodTemplate("get_value", [], "read", "float"),
+            MethodTemplate("assert_expired", [], "assertion"),
+        ],
+        "RegionAW": [
+            MethodTemplate("assert_visible", [], "assertion"),
+            MethodTemplate("get_text", [], "read", "str"),
+        ],
+        "GroupAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("assert_contains", [{"name": "text", "type": "str"}], "assertion"),
+        ],
+        "ListAW": [
+            MethodTemplate("get_items", [], "read", "list"),
+            MethodTemplate("get_count", [], "read", "int"),
+            MethodTemplate("click_item", [{"name": "index", "type": "int"}], "click"),
+        ],
+        "ListItemAW": [
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("get_text", [], "read", "str"),
+        ],
+        "SeparatorAW": [
+            MethodTemplate("assert_visible", [], "assertion"),
+        ],
+        "ImageAW": [
+            MethodTemplate("assert_visible", [], "assertion"),
+            MethodTemplate("get_alt_text", [], "read", "str"),
+        ],
+        "HeadingAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("assert_text", [{"name": "text", "type": "str"}], "assertion"),
+        ],
+        "MainAW": [
+            MethodTemplate("assert_visible", [], "assertion"),
+        ],
+        "FooterAW": [
+            MethodTemplate("assert_visible", [], "assertion"),
+            MethodTemplate("get_text", [], "read", "str"),
+        ],
+        "TableRowAW": [
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("get_cell", [{"name": "index", "type": "int"}], "read", "str"),
+        ],
+        "TableCellAW": [
+            MethodTemplate("get_text", [], "read", "str"),
+            MethodTemplate("click", [], "click"),
+        ],
+        "UnknownAW": [
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("assert_visible", [], "assertion"),
         ],
     }
 

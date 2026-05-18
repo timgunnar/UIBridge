@@ -275,8 +275,8 @@ project:
 # 确认 adapter.yaml 被正确读取
 python -c "
 from uibridge.cli import load_adapter
-adapter = load_adapter('.uibridge/adapter.yaml')
-print(adapter.__class__.__name__)
+resolver, locator, recognizer, generator, data_formatter = load_adapter('.uibridge/adapter.yaml')
+print(resolver.__class__.__name__)
 "
 ```
 

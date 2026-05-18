@@ -8,7 +8,7 @@
 
 uibridge 给企业 UI 自动化框架装上 AI 接口。核心思路：学习企业框架约定 → 把浏览器 DOM 操作翻译成企业风格的测试代码。不改架构、不换框架、不重构。
 
-生成的代码是分层的（ComponentAW → BusinessAW → TestScript），人和 AI 都能持续维护，长期保持代码质量。
+生成的代码是四层输出结构（ComponentAW → BusinessAW → TestScript + TestData），人和 AI 都能持续维护，长期保持代码质量。
 
 ## 架构速览
 
@@ -20,10 +20,10 @@ uibridge 给企业 UI 自动化框架装上 AI 接口。核心思路：学习企
                   → 自检 (pytest / mvn test)
 ```
 
-三层架构：
+系统分为三层（注意：系统的三层架构 ≠ 代码产出的四层结构，详见下文）：
 - **Layer 1 通用引擎**：录制、ARIA 快照、DOM diff、场景分割。语言无关、框架无关。
 - **Layer 2 框架适配器**：5 个接口（ComponentResolver / LocatorStrategy / ActionRecognizer / CodeGenerator / DataFormatter）。换公司 = 换适配器。
-- **Layer 3 生成产物**：组件 AW、业务 AW、测试脚本、测试数据。
+- **Layer 3 生成产物**：产出四层代码结构（ComponentAW → BusinessAW → TestScript + TestData）。
 
 ## 关键目录
 
@@ -40,7 +40,7 @@ uibridge 给企业 UI 自动化框架装上 AI 接口。核心思路：学习企
 | `templates/` | 企业项目接入模板（CLAUDE.md + .mcp.json + adapter.yaml） |
 | `docs/` | 用户文档（用户手册、适配器开发、录制指南、KB 维护、LLM 对接） |
 | `demo_projects/` | 4 组演示项目（Python A/B, Java C/D） |
-| `tests/` | 兼容性测试（107 个，全部通过） |
+| `tests/` | 兼容性测试（131 个，全部通过） |
 
 ## 文档索引
 
@@ -76,7 +76,7 @@ pip install -e .
 2. 实现 5 个接口：ComponentResolver、LocatorStrategy、ActionRecognizer、CodeGenerator、DataFormatter
 3. 在 `tests/` 添加兼容性测试
 
-完整流程见 [docs/adapter-guide.md](docs/adapter-guide.md)（Phase 1-5），含接口代码骨架、参考实现、复杂封装对策。测试数当前为 107 个，以此为准。
+完整流程见 [docs/adapter-guide.md](docs/adapter-guide.md)（Phase 1-5），含接口代码骨架、参考实现、复杂封装对策。测试数当前为 131 个，以此为准。
 
 ### 适配器 vs 改核心：决策树
 

@@ -1,6 +1,7 @@
 """Java Fluent 适配器 — Java + TestNG + PageFactory + AssertJ 流式模式"""
 
 import re
+from typing import Optional
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
@@ -9,6 +10,7 @@ from .base import (
     BAWDef, CallDef,
     ImportStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
+    scan_java_source_for_package,
 )
 
 
@@ -154,34 +156,83 @@ class FluentActionRecognizer(ActionRecognizer):
 class FluentCodeGenerator(CodeGenerator):
     """生成 Fluent API + PageFactory + AssertJ 风格"""
 
-    def __init__(self, kb_manager=None, package_name: str = "com.fluent"):
+    def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
-        self.package = package_name
+        if package_name is not None:
+            self.package = package_name
+        else:
+            pkg = self._resolve_package()
+            if pkg is None:
+                self.package = "com.fluent"
+            else:
+                self.package = pkg
+
+    def _resolve_package(self) -> Optional[str]:
+        packages: set[str] = set()
+        if self.kb:
+            for item in self.kb.store.list_category("conventions"):
+                if "package" in item.key:
+                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
+                    if pkg:
+                        packages.add(pkg)
+            if not packages:
+                for item in self.kb.store.list_category("components"):
+                    key = item.key
+                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
+                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
+                        if len(pkg_parts) > 1:
+                            packages.add(pkg_parts[0])
+            if packages:
+                parts_list = [p.split(".") for p in packages]
+                common = parts_list[0]
+                for p in parts_list[1:]:
+                    i = 0
+                    while i < min(len(common), len(p)) and common[i] == p[i]:
+                        i += 1
+                    common = common[:i]
+                if common:
+                    return ".".join(common)
+
+        if self.kb and hasattr(self.kb, 'project_root'):
+            result = scan_java_source_for_package(str(self.kb.project_root))
+            if result is not None:
+                return result
+
+        return None
+
+    def _post_process(self, code: str) -> str:
+        """后处理：默认包时移除 package 行和项目内 import。"""
+        if self.package:
+            return code
+        code = re.sub(r'^\s*package\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
+        code = re.sub(r'^\s*import\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
+        code = re.sub(r'\n{3,}', '\n\n', code)
+        return code.strip() + '\n'
 
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
         from jinja2 import Environment, BaseLoader
         env = Environment(loader=BaseLoader())
         template = env.from_string(FLUENT_ELEMENT_TEMPLATE)
-        return template.render(comp=comp_def, package=self.package)
+        return self._post_process(template.render(comp=comp_def, package=self.package))
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
         from jinja2 import Environment, BaseLoader
         env = Environment(loader=BaseLoader())
         template = env.from_string(FLUENT_PAGE_TEMPLATE)
-        return template.render(baw=baw_def, package=self.package)
+        return self._post_process(template.render(baw=baw_def, package=self.package))
 
     def generate_test_script(self, script_def: ScriptDef) -> str:
         from jinja2 import Environment, BaseLoader
         env = Environment(loader=BaseLoader())
         template = env.from_string(FLUENT_TEST_TEMPLATE)
-        return template.render(s=script_def, package=self.package)
+        return self._post_process(template.render(s=script_def, package=self.package))
 
     def generate_test_data(self, data_def: TestDataDef) -> str:
         from jinja2 import Environment, BaseLoader
         env = Environment(loader=BaseLoader())
         env.filters["repr"] = lambda v: repr(v)
         template = env.from_string(FLUENT_DATA_BUILDER_TEMPLATE)
-        return template.render(d=data_def, package=self.package)
+        return self._post_process(template.render(d=data_def, package=self.package))
 
     def get_import_style(self) -> ImportStyle:
         if self.kb:
@@ -253,9 +304,42 @@ class FluentCodeGenerator(CodeGenerator):
 class FluentDataFormatter(DataFormatter):
     """Fluent: Builder 模式而不是常量类"""
 
-    def __init__(self, kb_manager=None, package_name: str = "com.fluent"):
+    def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
-        self.package = package_name
+        if package_name is not None:
+            self.package = package_name
+        else:
+            pkg = self._resolve_package()
+            if pkg is None:
+                self.package = "com.fluent"
+            else:
+                self.package = pkg
+
+    def _resolve_package(self) -> Optional[str]:
+        packages: set[str] = set()
+        if self.kb:
+            for item in self.kb.store.list_category("conventions"):
+                if "package" in item.key:
+                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
+                    if pkg:
+                        packages.add(pkg)
+            if packages:
+                parts_list = [p.split(".") for p in packages]
+                common = parts_list[0]
+                for p in parts_list[1:]:
+                    i = 0
+                    while i < min(len(common), len(p)) and common[i] == p[i]:
+                        i += 1
+                    common = common[:i]
+                if common:
+                    return ".".join(common)
+
+        if self.kb and hasattr(self.kb, 'project_root'):
+            result = scan_java_source_for_package(str(self.kb.project_root))
+            if result is not None:
+                return result
+
+        return None
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
         domain = data_context.get("domain", "unknown")
@@ -272,7 +356,9 @@ class FluentDataFormatter(DataFormatter):
 
     def get_data_ref_style(self, domain: str) -> str:
         class_name = f"{self._java_class_name(domain)}Builder"
-        return f"import {self.package}.builders.{class_name};"
+        if self.package:
+            return f"import {self.package}.builders.{class_name};"
+        return f"import builders.{class_name};"
 
     def _java_class_name(self, name: str) -> str:
         parts = re.split(r'[-_\s]', name)

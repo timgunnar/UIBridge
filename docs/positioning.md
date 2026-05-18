@@ -72,14 +72,11 @@ sequenceDiagram
     A->>U: "4 个测试，自检全部通过"
 ```
 
-**天生四层结构**：
+**天生四层结构**（详见 DESIGN.md）：
 
 ```
-generated/
-├── components/     ← 一个元素改了只改这里
-├── business/       ← 组合组件，表达业务流程
-├── tests/          ← 测试脚本
-└── data/           ← 测试数据
+生成代码遵循 ComponentAW → BusinessAW → TestScript + TestData 四层架构。
+每层只关心自己的职责 —— 元素变了只改一层，测试不用动。
 ```
 
 **为什么分层是关键**：NL 方案生成线性脚本，50 个测试后一个 DOM 改了要改 20 个文件。分层输出 → 一个元素改了只改 ComponentAW，50 个测试不受影响。

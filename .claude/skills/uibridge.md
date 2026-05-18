@@ -24,6 +24,7 @@ kind: skill
 | `analyze_page` | 分析页面，发现组件 | 用户说"分析一下这个页面" |
 | `start_recording` | 开始交互式录制（打开浏览器） | 用户说"帮我录一个" |
 | `stop_recording` | 停止录制，保存文件，关闭浏览器 | 用户操作完成后 |
+| `record_browser_operations` | [CLI 用] 一次性录制 | CLI 模式下使用 |
 | `generate_test_code` | 从录制生成测试代码 | 录制完成后自动调用 |
 | `diff_snapshots` | 对比前后快照 | 用户问"应该断言什么" |
 | `seed_knowledge_base` | 播种知识库 | 首次接入新项目 |

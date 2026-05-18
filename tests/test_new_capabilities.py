@@ -645,3 +645,279 @@ class TestPrefixSpanAlgorithm:
         sequences = [["a"], ["b"], ["c"]]
         results = miner.mine(sequences)
         assert results == []
+
+
+# ═══════════════════════════════════════════════════════════════
+# Pipeline — 空闲间隔场景分割
+# ═══════════════════════════════════════════════════════════════
+
+class TestPipelineIdleGapSplitting:
+    """Pipeline.analyze 空闲间隔场景分割测试"""
+
+    def test_idle_gap_splits_scenario(self):
+        """步骤间空闲超过 5 秒应分割为新场景"""
+        from uibridge.pipeline import Pipeline
+        from uibridge.adapter.reference import (
+            ReferenceComponentResolver, ReferenceLocatorStrategy,
+            ReferenceActionRecognizer, ReferenceCodeGenerator, ReferenceDataFormatter,
+        )
+        from uibridge.engine.ir.raw_recording import (
+            RawRecording, RawStep, ActionType, Target,
+        )
+
+        pipeline = Pipeline(
+            component_resolver=ReferenceComponentResolver(),
+            locator_strategy=ReferenceLocatorStrategy(),
+            action_recognizer=ReferenceActionRecognizer(),
+            code_generator=ReferenceCodeGenerator(),
+            data_formatter=ReferenceDataFormatter(),
+        )
+
+        recording = RawRecording(steps=[
+            RawStep(id="s1", action=ActionType.CLICK,
+                    target=Target(label="btn1"), timestamp_ms=0),
+            RawStep(id="s2", action=ActionType.CLICK,
+                    target=Target(label="btn2"), timestamp_ms=1000),
+            RawStep(id="s3", action=ActionType.CLICK,
+                    target=Target(label="btn3"), timestamp_ms=8000),  # >5s gap
+        ], snapshots={})
+
+        semantic = pipeline.analyze(recording)
+        assert len(semantic.scenarios) == 2, \
+            f"Expected 2 scenarios due to idle gap, got {len(semantic.scenarios)}"
+
+    def test_no_split_with_small_gap(self):
+        """小间隔不应分割场景"""
+        from uibridge.pipeline import Pipeline
+        from uibridge.adapter.reference import (
+            ReferenceComponentResolver, ReferenceLocatorStrategy,
+            ReferenceActionRecognizer, ReferenceCodeGenerator, ReferenceDataFormatter,
+        )
+        from uibridge.engine.ir.raw_recording import (
+            RawRecording, RawStep, ActionType, Target,
+        )
+
+        pipeline = Pipeline(
+            component_resolver=ReferenceComponentResolver(),
+            locator_strategy=ReferenceLocatorStrategy(),
+            action_recognizer=ReferenceActionRecognizer(),
+            code_generator=ReferenceCodeGenerator(),
+            data_formatter=ReferenceDataFormatter(),
+        )
+
+        recording = RawRecording(steps=[
+            RawStep(id="s1", action=ActionType.CLICK,
+                    target=Target(label="btn1"), timestamp_ms=0),
+            RawStep(id="s2", action=ActionType.CLICK,
+                    target=Target(label="btn2"), timestamp_ms=2000),
+            RawStep(id="s3", action=ActionType.CLICK,
+                    target=Target(label="btn3"), timestamp_ms=4000),
+        ], snapshots={})
+
+        semantic = pipeline.analyze(recording)
+        assert len(semantic.scenarios) == 1, \
+            f"Expected 1 scenario (no idle gap), got {len(semantic.scenarios)}"
+
+    def test_navigate_still_splits(self):
+        """NAVIGATE 仍然是场景边界"""
+        from uibridge.pipeline import Pipeline
+        from uibridge.adapter.reference import (
+            ReferenceComponentResolver, ReferenceLocatorStrategy,
+            ReferenceActionRecognizer, ReferenceCodeGenerator, ReferenceDataFormatter,
+        )
+        from uibridge.engine.ir.raw_recording import (
+            RawRecording, RawStep, ActionType, Target,
+        )
+
+        pipeline = Pipeline(
+            component_resolver=ReferenceComponentResolver(),
+            locator_strategy=ReferenceLocatorStrategy(),
+            action_recognizer=ReferenceActionRecognizer(),
+            code_generator=ReferenceCodeGenerator(),
+            data_formatter=ReferenceDataFormatter(),
+        )
+
+        recording = RawRecording(steps=[
+            RawStep(id="s1", action=ActionType.CLICK,
+                    target=Target(label="btn1"), timestamp_ms=0),
+            RawStep(id="s2", action=ActionType.NAVIGATE,
+                    target=Target(url="/users"), timestamp_ms=100),
+            RawStep(id="s3", action=ActionType.CLICK,
+                    target=Target(label="btn2"), timestamp_ms=200),
+        ], snapshots={})
+
+        semantic = pipeline.analyze(recording)
+        assert len(semantic.scenarios) == 2, \
+            f"Expected 2 scenarios (NAVIGATE boundary), got {len(semantic.scenarios)}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Reference 适配器 — 扩展 ARIA 角色
+# ═══════════════════════════════════════════════════════════════
+
+class TestReferenceAdapterExpandedRoles:
+    """验证新增 ARIA 角色能正确解析"""
+
+    def test_slider_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("slider", {}, "") == "SliderAW"
+
+    def test_progressbar_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("progressbar", {}, "") == "ProgressAW"
+
+    def test_alert_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("alert", {}, "") == "AlertAW"
+
+    def test_tooltip_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("tooltip", {}, "") == "TooltipAW"
+
+    def test_switch_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("switch", {}, "") == "ToggleAW"
+
+    def test_list_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("list", {}, "") == "ListAW"
+
+    def test_img_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("img", {}, "") == "ImageAW"
+
+    def test_heading_resolves(self):
+        resolver = ReferenceComponentResolver()
+        assert resolver.resolve_type("heading", {}, "") == "HeadingAW"
+
+    def test_new_roles_have_methods(self):
+        """新增角色应有对应的方法模板"""
+        resolver = ReferenceComponentResolver()
+        for role, aw_type in [
+            ("slider", "SliderAW"),
+            ("progressbar", "ProgressAW"),
+            ("alert", "AlertAW"),
+            ("switch", "ToggleAW"),
+            ("list", "ListAW"),
+            ("img", "ImageAW"),
+            ("heading", "HeadingAW"),
+            ("status", "StatusAW"),
+            ("banner", "BannerAW"),
+        ]:
+            methods = resolver.get_methods_for_role(aw_type, role)
+            assert len(methods) > 0, f"{aw_type} should have methods"
+            assert all(hasattr(m, "name") for m in methods)
+
+
+# ═══════════════════════════════════════════════════════════════
+# SelfTestRunner — 新增修复规则
+# ═══════════════════════════════════════════════════════════════
+
+class TestSelfTestNewFixRules:
+    """自检新增修复规则测试"""
+
+    def test_rule_missing_test_annotation(self):
+        """Rule 6: Java 缺 @Test 注解"""
+        runner = SelfTestRunner()
+        code = (
+            "package test;\n"
+            "import org.testng.annotations.Test;\n"
+            "public class FooTest {\n"
+            "    public void testSomething() {\n"
+            "    }\n"
+            "}"
+        )
+        error = "no test methods found in class FooTest"
+        new_code, applied = runner._apply_fix_rules(code, error, "java")
+        assert applied != "", f"Should apply fix, got: '{applied}'"
+        assert "@Test" in new_code
+
+    def test_rule_missing_self(self):
+        """Rule 8: Python 方法缺 self 参数"""
+        runner = SelfTestRunner()
+        code = "import pytest\n\nclass Foo:\n    def test_something():\n        pass\n"
+        error = "test_something() takes 0 positional arguments but 1 was given"
+        new_code, applied = runner._apply_fix_rules(code, error, "python")
+        assert applied != "", f"Should apply fix, got: '{applied}'"
+        assert "self" in new_code
+
+    def test_rule_missing_colon(self):
+        """Rule 9: Python SyntaxError 缺冒号"""
+        runner = SelfTestRunner()
+        code = "import pytest\n\ndef test_foo()\n    pass\n"
+        error = "SyntaxError: invalid syntax"
+        new_code, applied = runner._apply_fix_rules(code, error, "python")
+        assert applied != "", f"Should apply fix, got: '{applied}'"
+        assert "):" in new_code
+
+    def test_rule_npe_adds_teardown(self):
+        """Rule 7: NullPointerException 加 tearDown"""
+        runner = SelfTestRunner()
+        code = (
+            "package test;\n"
+            "import org.testng.annotations.Test;\n"
+            "public class FooTest {\n"
+            "    @Test\n"
+            "    public void testSomething() {\n"
+            "        driver.get(\"http://test\");\n"
+            "    }\n"
+            "}"
+        )
+        error = "NullPointerException at FooTest.tearDown"
+        new_code, applied = runner._apply_fix_rules(code, error, "java")
+        assert applied != "", f"Should apply fix, got: '{applied}'"
+        assert "tearDown" in new_code or "driver.quit" in new_code
+
+
+# ═══════════════════════════════════════════════════════════════
+# MCP Server 辅助函数
+# ═══════════════════════════════════════════════════════════════
+
+class TestMCPHelpers:
+    """MCP Server URL 校验和路径安全化测试"""
+
+    def test_validate_url_http(self):
+        from uibridge.mcp_server import _validate_url
+        assert _validate_url("https://example.com") == "https://example.com"
+
+    def test_validate_url_about_blank(self):
+        from uibridge.mcp_server import _validate_url
+        assert _validate_url("about:blank") == "about:blank"
+
+    def test_validate_url_rejects_empty(self):
+        from uibridge.mcp_server import _validate_url
+        import pytest
+        with pytest.raises(ValueError, match="URL 不能为空"):
+            _validate_url("")
+        with pytest.raises(ValueError, match="URL 不能为空"):
+            _validate_url("   ")
+
+    def test_validate_url_rejects_javascript(self):
+        from uibridge.mcp_server import _validate_url
+        import pytest
+        with pytest.raises(ValueError, match="禁止的 URL 协议"):
+            _validate_url("javascript:alert(1)")
+
+    def test_validate_url_rejects_data(self):
+        from uibridge.mcp_server import _validate_url
+        import pytest
+        with pytest.raises(ValueError, match="禁止的 URL 协议"):
+            _validate_url("data:text/html,<script>alert(1)</script>")
+
+    def test_validate_url_rejects_no_scheme(self):
+        from uibridge.mcp_server import _validate_url
+        import pytest
+        with pytest.raises(ValueError, match="URL 必须以 http"):
+            _validate_url("example.com")
+
+    def test_sanitize_output_path_inside_base(self):
+        from uibridge.mcp_server import _sanitize_output_path
+        import tempfile
+        result = _sanitize_output_path("recording.json")
+        assert result.name == "recording.json"
+
+    def test_sanitize_output_path_traversal_blocked(self):
+        from uibridge.mcp_server import _sanitize_output_path
+        result = _sanitize_output_path("../../../etc/passwd")
+        assert result.name == "passwd"
+        assert not str(result).startswith("/etc")

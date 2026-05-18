@@ -70,6 +70,7 @@ class Snapshot:
     aria_snapshot: str = ""
     layout_info: str = "{}"
     timestamp_ms: int = 0
+    error: str = ""
 
 
 @dataclass

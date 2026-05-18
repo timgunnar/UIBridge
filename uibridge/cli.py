@@ -68,7 +68,7 @@ def _import_adapter_from_config(components_config: dict) -> tuple:
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.2.0")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 

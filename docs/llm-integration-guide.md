@@ -132,7 +132,7 @@ cp .claude/skills/uibridge.md /path/to/your-project/.claude/skills/
 
 ### Skill 文件内容
 
-Skill 文件定义触发词和工作流步骤，详见 `templates/.claude/skills/uibridge.md`。
+Skill 文件定义触发词和工作流步骤，详见 `.claude/skills/uibridge.md`。
 
 ---
 

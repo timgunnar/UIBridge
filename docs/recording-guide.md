@@ -71,11 +71,11 @@ recording.json
 
 ```
 generated/
-├── components/UserSearchBox.java     ← ComponentAW（组件级）
-├── business/UserSearchBAW.java       ← BusinessAW（业务级）
-├── tests/TestUserSearch.java         ← TestScript（测试用例）
+├── tests/TestUserSearch.java         ← TestScript（含 ComponentAW/BusinessAW 四层架构）
 └── data/UserSearchData.java          ← TestData（测试数据）
 ```
+
+代码本身遵循 ComponentAW → BusinessAW → TestScript + TestData 四层结构，维护时只改对应层即可。
 
 AI 报告："生成了 1 个测试用例，自检通过。"
 

@@ -1,8 +1,49 @@
 """适配器抽象接口 — 每个公司实现一次，注入框架知识"""
 
+import re
+from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+def scan_java_source_for_package(project_root: str) -> Optional[str]:
+    """扫描项目 .java 源码中的 package 声明，推断基础包名。
+
+    返回值：
+    - 包名字符串（如 "com.enterprise"）：检测到统一包名
+    - ""（空字符串）：存在 .java 文件但无 package 声明（默认包）
+    - None：未找到任何 .java 文件，无法推断
+    """
+    root = Path(project_root)
+    java_files = list(root.glob("**/*.java"))
+    if not java_files:
+        return None
+
+    packages: list[str] = []
+    for f in java_files[:50]:
+        try:
+            content = f.read_text(encoding="utf-8")
+            m = re.search(r'^\s*package\s+([a-zA-Z_][\w.]*)\s*;', content, re.MULTILINE)
+            if m:
+                packages.append(m.group(1))
+        except Exception:
+            pass
+
+    if not packages:
+        return ""  # 默认包
+
+    if len(packages) == 1:
+        return packages[0]
+
+    parts_list = [p.split(".") for p in packages]
+    common = parts_list[0]
+    for p in parts_list[1:]:
+        i = 0
+        while i < min(len(common), len(p)) and common[i] == p[i]:
+            i += 1
+        common = common[:i]
+    return ".".join(common) if common else max(set(packages), key=packages.count)
 
 
 # ── 跨接口共享的数据类型 ──────────────────────

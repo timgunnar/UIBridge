@@ -1,11 +1,14 @@
 """KBExtractor — extract knowledge from static analysis, runtime analysis, and documents"""
 
 import ast
+import logging
 import re
 from pathlib import Path
 from typing import Optional
 
 from .kb_item import KBItem, Confidence, KnowledgeSource
+
+logger = logging.getLogger(__name__)
 
 
 class KBExtractor:
@@ -13,6 +16,17 @@ class KBExtractor:
 
     def __init__(self, project_root: str = "."):
         self.project_root = Path(project_root)
+        self._java_available = None  # 延迟检测
+
+    def _check_javalang(self) -> bool:
+        """检测 javalang 是否可用，缓存结果。"""
+        if self._java_available is None:
+            try:
+                import javalang  # noqa: F401
+                self._java_available = True
+            except ImportError:
+                self._java_available = False
+        return self._java_available
 
     # ── Static Analysis (confidence 0.6-0.8) ──────────
 
@@ -230,10 +244,15 @@ class KBExtractor:
     # ── Java AST Helpers ──────────────────────────────
 
     def _parse_java(self, path: Path):
-        """Parse Java file using javalang."""
+        """Parse Java file using javalang. Returns None if javalang unavailable or parse fails."""
+        if not self._check_javalang():
+            return None
         try:
             import javalang
             return javalang.parse.parse(path.read_text(encoding="utf-8"))
+        except ImportError:
+            self._java_available = False
+            return None
         except Exception:
             return None
 
@@ -244,8 +263,8 @@ class KBExtractor:
             for path_node, node in tree:
                 if hasattr(node, 'name') and type(node).__name__ == 'ClassDeclaration':
                     return node.name
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Error finding Java class name: %s", e)
         return None
 
     def _extract_java_package(self, tree) -> str:
@@ -254,8 +273,8 @@ class KBExtractor:
         try:
             if hasattr(tree, 'package') and tree.package:
                 return tree.package.name
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Error extracting Java package: %s", e)
         return ""
 
     def _extract_java_methods(self, tree) -> list[dict]:
@@ -273,8 +292,8 @@ class KBExtractor:
                         "returns": returns,
                         "modifiers": list(node.modifiers) if node.modifiers else [],
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Error extracting Java methods: %s", e)
         return methods
 
     def _extract_java_annotations(self, tree) -> list[str]:
@@ -283,8 +302,8 @@ class KBExtractor:
             for path_node, node in tree:
                 if type(node).__name__ == 'Annotation':
                     annotations.append(node.name)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Error extracting Java annotations: %s", e)
         return list(set(annotations))
 
     def _extract_java_imports(self, tree) -> list[str]:
@@ -293,8 +312,8 @@ class KBExtractor:
             if hasattr(tree, 'imports') and tree.imports:
                 for imp in tree.imports:
                     imports.append(imp.path)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Error extracting Java imports: %s", e)
         return imports
 
     # ── Document Ingestion (confidence 0.9-0.99) ──────
