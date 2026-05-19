@@ -23,7 +23,7 @@
               (JSON-RPC)        (FastMCP, 常驻进程)
 ```
 
-MCP Server 启动后保持常驻，暴露 8 个类型化工具。Agent 通过标准 MCP 协议调用。
+MCP Server 启动后保持常驻，暴露 9 个类型化工具。Agent 通过标准 MCP 协议调用。
 
 ### 配置（.mcp.json）
 
@@ -46,32 +46,39 @@ MCP Server 启动后保持常驻，暴露 8 个类型化工具。Agent 通过标
 | 工具 | 参数 | 返回 |
 |------|------|------|
 | `analyze_page` | `url`, `adapter_config?` | 页面组件列表（类型、XPath、ARIA role） |
-| `start_recording` | `url`, `adapter_config?` | `{session_id, status: "recording"}` |
+| `open_browser` | `url` | `{session_id, status: "browser_ready"}` |
+| `start_recording` | `adapter_config?` | `{session_id, status: "recording"}` |
 | `stop_recording` | `output_file?` | `{steps: N, file: "recording.json", summary}` |
-| `record_browser_operations` | `url`, `output_file?` | [CLI 用] 一次性录制结果 |
 | `generate_test_code` | `input_file?`, `output_dir?`, `adapter_config?` | 生成代码 + 自检结果 |
 | `diff_snapshots` | `input_file?` | 断言候选列表 |
 | `seed_knowledge_base` | `project_dir` | KB 播种摘要 |
 | `query_knowledge_base` | `query`, `project_dir?` | KB 查询结果 |
+| `check_environment` | (无) | 浏览器等运行环境状态 |
 
-### Agent 工作流（双工具模型）
+### Agent 工作流（三段式录制）
 
-录制必须使用两个独立的 MCP 调用：
+录制分为三个阶段，对应三次 MCP 调用：
 
 ```
-1. 调用 start_recording(url="http://localhost:8080/users")
-   → 浏览器打开，录制开始。返回 {session_id: "active", status: "recording"}
+1. 调用 open_browser(url="http://localhost:8080/users")
+   → 浏览器打开（不录制）。返回 {session_id, status: "browser_ready"}
 
-2. 告诉用户："浏览器已打开，请操作。完成后告诉我。"
+2. 告诉用户："浏览器已打开，请做预置操作（登录、导航等），准备好后告诉我。"
 
-3. 用户操作完成并告知后，调用 stop_recording()
-   → 录制停止，保存到 recording.json，浏览器关闭
+3. 用户预置完成后，调用 start_recording()
+   → 在已打开的浏览器上注入录制脚本，开始捕获。返回 {session_id, status: "recording"}
 
-4. 调用 generate_test_code()
+4. 告诉用户："录制中，请操作。完成后告诉我。"
+
+5. 用户操作完成并告知后，调用 stop_recording()
+   → 停止录制，保存 recording.json，关闭浏览器
+
+6. 调用 generate_test_code()
    → 生成代码 + 自检，报告结果
 ```
 
-**为什么是两次调用？** MCP 的请求-响应模式天然不适合跨越用户多个对话回合。`start_recording` 返回后浏览器保持打开，用户操作期间 Agent 等待，用户说"完成"后 Agent 调用 `stop_recording` 结束录制。
+**为什么是三段式？** 用户可能需要预置操作（登录、导航到目标页面），这些不应被录制。
+MCP 请求-响应模式天然跨越用户多轮对话。三个调用分别对应打开 → 开始录制 → 结束录制。
 
 ### 手动启动 MCP Server
 

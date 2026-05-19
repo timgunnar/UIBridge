@@ -83,11 +83,13 @@ Agent 自动检测框架 → 扫描源码播种知识库 → 报告就绪。
 
 ```mermaid
 flowchart LR
-    A["分析页面<br/>analyze_page()"] --> B["开始录制<br/>start_recording()"]
-    B --> C["你在浏览器操作"]
-    C --> D["停止录制<br/>stop_recording()"]
-    D --> E["生成+自检<br/>generate_test_code()"]
-    E --> F["交付"]
+    A["分析页面<br/>analyze_page()"] --> B["打开浏览器<br/>open_browser()"]
+    B --> C["你在浏览器预置"]
+    C --> D["开始录制<br/>start_recording()"]
+    D --> E["你在浏览器操作"]
+    E --> F["停止录制<br/>stop_recording()"]
+    F --> G["生成+自检<br/>generate_test_code()"]
+    G --> H["交付"]
 ```
 
 ### 分析页面
@@ -101,10 +103,13 @@ Agent：页面有 1 个 table、3 个 input、2 个 button...
 
 ```
 你：帮我测用户管理的搜索功能
-Agent：[打开浏览器] "请操作，完成后告诉我。"
-[你在浏览器中操作]
+Agent：分析页面 → 打开浏览器 "请做预置操作，准备好后告诉我"
+[你在浏览器中登录、导航等预置操作]
 你：好了
-Agent：停止录制 → 生成代码 → 自检通过 → "4 个测试，全部通过 ✓"
+Agent：开始录制 "请操作"
+[你在浏览器中操作搜索功能]
+你：完成了
+Agent：停止录制 → 生成代码 → 自检通过 → "3 个测试，全部通过 ✓"
 ```
 
 ### 对比页面变化
@@ -149,12 +154,14 @@ Agent：了解。读取 ADAPTER_GUIDE.md → 分析 pom.xml → 学习 pages/*.j
 | MCP 工具 | 用途 |
 |---------|------|
 | `analyze_page` | 分析页面组件 |
-| `start_recording` | 打开浏览器开始录制 |
-| `stop_recording` | 停止录制，保存文件 |
+| `open_browser` | 打开可见浏览器（不录制） |
+| `start_recording` | 在已打开的浏览器上开始录制 |
+| `stop_recording` | 停止录制，保存文件，关闭浏览器 |
 | `generate_test_code` | 生成代码 + 自检 |
 | `diff_snapshots` | 对比页面变化 |
 | `seed_knowledge_base` | 扫描源码播种 KB |
 | `query_knowledge_base` | 查询框架约定 |
+| `check_environment` | 检查 uibridge 运行环境 |
 
 ### CLI 命令（MCP 不可用时）
 

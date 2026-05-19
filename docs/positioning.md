@@ -72,7 +72,7 @@ sequenceDiagram
     A->>U: "4 个测试，自检全部通过"
 ```
 
-**天生四层结构**（详见 DESIGN.md）：
+**天生四层结构**：
 
 ```
 生成代码遵循 ComponentAW → BusinessAW → TestScript + TestData 四层架构。

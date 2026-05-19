@@ -11,6 +11,7 @@ class ActionType(str, Enum):
     CLICK = "click"
     SELECT = "select"
     CHECK = "check"
+    UNCHECK = "uncheck"
     KEYDOWN = "keydown"
     ASSERT = "assert"
     TAB_SWITCH = "tab_switch"
@@ -21,6 +22,12 @@ class ActionType(str, Enum):
     DROP = "drop"
     SCROLL = "scroll"
     MUTATION = "mutation"
+    SUBMIT = "submit"
+    FOCUS = "focus"
+    BLUR = "blur"
+    DIALOG = "dialog"
+    CLIPBOARD = "clipboard"
+    FILE_UPLOAD = "file_upload"
 
 
 @dataclass

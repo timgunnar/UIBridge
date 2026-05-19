@@ -9,9 +9,18 @@
 import asyncio
 import concurrent.futures
 import json
+import sys
 import threading
+import uuid
 from pathlib import Path
 from typing import Optional
+
+# 将 editable finders 提升到 meta_path 最前面，
+# 防止 CWD 下同名目录被 PathFinder 优先匹配为命名空间包。
+_editable_finders = [f for f in sys.meta_path if hasattr(f, '__name__') and '__editable__' in f.__name__]
+for _ef in reversed(_editable_finders):
+    sys.meta_path.remove(_ef)
+    sys.meta_path.insert(0, _ef)
 
 import yaml
 from mcp.server.fastmcp import FastMCP
@@ -33,8 +42,10 @@ async def _run_pw(func, *args, **kwargs):
     return await loop.run_in_executor(_pw_executor, lambda: func(*args, **kwargs))
 
 
-# ── 模块级录制状态 ──────────────────────────────────────
-_active_recording: dict | None = None
+# ── 模块级状态 ──────────────────────────────────────
+# 三段式录制: open_browser → start_recording → stop_recording
+_active_browser_staging: dict | None = None  # open_browser 阶段：浏览器已打开但未开始录制
+_active_recording: dict | None = None        # start_recording 阶段：录制进行中
 _recording_lock = threading.Lock()
 
 
@@ -45,8 +56,8 @@ _recording_lock = threading.Lock()
 # 禁止的协议前缀，防止 URL 注入
 _BLOCKED_URL_SCHEMES = ("javascript:", "data:", "vbscript:", "file:")
 
-# 允许的输出基础目录（Path.resolve 后的锚点）
-_OUTPUT_BASE = Path(__file__).resolve().parent.parent
+# 允许的输出基础目录：调用方 CWD（即 Agent / 企业项目根目录）
+_OUTPUT_BASE = Path.cwd()
 
 
 def _validate_url(url: str) -> str:
@@ -287,55 +298,182 @@ async def analyze_page(
 
 
 @mcp.tool()
-async def start_recording(
+async def open_browser(
     url: str = "about:blank",
-    adapter_config: Optional[str] = None,
 ) -> str:
-    """启动交互式浏览器录制。打开可见浏览器窗口，注入事件监听，开始捕获用户操作。
+    """打开可见浏览器窗口（不录制）。
 
-    用于：用户想录制某个功能的操作流程时，作为第一步调用。
-    调用后浏览器打开，用户在浏览器中操作页面。操作完成后，Agent 调用 stop_recording()
-    结束录制并保存文件。
+    这是三段式录制的第一步。仅打开浏览器并导航到 URL，不注入录制脚本。
+    用户在此阶段可进行预置操作（登录、导航到目标页面等）。
 
-    这是录制两步曲的第一步，与 stop_recording 配对使用。
-    支持同时只有一个活跃录制会话（重复调用会替换旧会话）。
+    预置完成后，调用 start_recording() 开始录制。
+
+    三段式流程: open_browser → [用户预置] → start_recording → [用户操作] → stop_recording
 
     参数：
     - url: 起始页面 URL
-    返回：会话状态 JSON，含 session_id 和 url。
+    返回：会话状态 JSON。
     """
-
     _validate_url(url)
 
     def _sync():
-        global _active_recording
+        global _active_browser_staging, _active_recording
+        from playwright.sync_api import sync_playwright
+
+        pw = None
+        context = None
+        try:
+            with _recording_lock:
+                # 录制进行中时拒绝打开新浏览器，防止误杀
+                if _active_recording:
+                    return json.dumps({
+                        "error": "录制正在进行中。请先调用 stop_recording 结束当前录制，再打开新浏览器。",
+                    }, indent=2, ensure_ascii=False)
+                if _active_browser_staging:
+                    try:
+                        _active_browser_staging["context"].close()
+                    except Exception:
+                        pass
+                    try:
+                        _active_browser_staging["pw"].stop()
+                    except Exception:
+                        pass
+
+                pw = sync_playwright().start()
+
+                # 持久化用户目录 — 模拟真实浏览器（cookie/localStorage 持久化，防反爬）
+                user_data_dir = Path.home() / ".uibridge" / "browser_profile"
+                user_data_dir.mkdir(parents=True, exist_ok=True)
+
+                context = pw.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data_dir),
+                    headless=False,
+                    no_viewport=True,
+                    # 去掉自动化标记，防止被反爬检测
+                    ignore_default_args=[
+                        "--enable-automation",           # 移除 "Chrome 正受到自動測試軟體控制"
+                    ],
+                    args=[
+                        "--disable-blink-features=AutomationControlled",  # 移除 navigator.webdriver
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                    ],
+                )
+                page = context.pages[0] if context.pages else context.new_page()
+
+                # 注入反检测脚本（在所有页面 JS 之前执行），覆盖自动化特征
+                page.add_init_script("""
+                    // 隐藏 webdriver 标记
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    // 伪造 chrome.runtime（自动化模式下为空）
+                    window.chrome = window.chrome || {};
+                    window.chrome.runtime = window.chrome.runtime || {};
+                    // 伪造 plugins 数组（自动化模式通常为空）
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5],
+                    });
+                    // 伪造 languages
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['zh-CN', 'zh', 'en'],
+                    });
+                """)
+                page.goto(url)
+
+                session_id = str(uuid.uuid4())[:8]
+
+                # 30 分钟超时保护：用户打开浏览器后长时间未开始录制，自动清理
+                def _auto_cleanup_staging():
+                    with _recording_lock:
+                        if _active_browser_staging and _active_browser_staging.get("session_id") == session_id:
+                            try:
+                                _active_browser_staging["context"].close()
+                            except Exception:
+                                pass
+                            try:
+                                _active_browser_staging["pw"].stop()
+                            except Exception:
+                                pass
+                            _active_browser_staging = None
+
+                timer = threading.Timer(1800, _auto_cleanup_staging)
+                timer.daemon = True
+                timer.start()
+
+                _active_browser_staging = {
+                    "session_id": session_id,
+                    "page": page,
+                    "context": context,
+                    "pw": pw,
+                    "_timeout_timer": timer,
+                }
+
+            return json.dumps({
+                "status": "browser_ready",
+                "session_id": session_id,
+                "url": url,
+                "hint": "浏览器已打开。用户可进行预置操作（登录、导航等），完成后调用 start_recording 开始录制。",
+            }, indent=2, ensure_ascii=False)
+        except Exception:
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            if pw:
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
+            with _recording_lock:
+                _active_browser_staging = None
+            raise
+
+    return await _run_pw(_sync)
+
+
+@mcp.tool()
+async def start_recording(
+    adapter_config: Optional[str] = None,
+) -> str:
+    """在已打开的浏览器上开始录制。必须先调用 open_browser 打开浏览器。
+
+    这是三段式录制的第二步。在 open_browser 打开的浏览器上注入事件监听，
+    开始捕获用户在浏览器中的操作。
+
+    如果用户在调用 start_recording 前做了预置操作（登录、导航等），
+    这些预置操作不会被录制，只录制 start_recording 之后的操作。
+
+    三段式流程: open_browser → [用户预置] → start_recording → [用户操作] → stop_recording
+
+    返回：会话状态 JSON，含 session_id。
+    """
+
+    def _sync():
+        global _active_browser_staging, _active_recording
         from playwright.sync_api import sync_playwright
 
         pipeline = _build_pipeline(adapter_config)
 
-        pw = None
-        browser = None
-        timer = None
         try:
             with _recording_lock:
-                # 如果已有活跃会话，先清理
-                if _active_recording:
-                    try:
-                        _active_recording["browser"].close()
-                    except Exception:
-                        pass
-                    try:
-                        _active_recording["pw"].stop()
-                    except Exception:
-                        pass
-                    if _active_recording.get("_timeout_timer"):
-                        _active_recording["_timeout_timer"].cancel()
+                if not _active_browser_staging:
+                    return json.dumps({
+                        "error": "没有已打开的浏览器。请先调用 open_browser 打开浏览器。",
+                    }, indent=2, ensure_ascii=False)
 
-                pw = sync_playwright().start()
-                browser = pw.chromium.launch(headless=False)
-                context = browser.new_context(viewport={"width": 1280, "height": 800})
-                page = context.new_page()
-                page.goto(url)
+                page = _active_browser_staging["page"]
+                context = _active_browser_staging["context"]
+                pw = _active_browser_staging["pw"]
+                session_id = _active_browser_staging["session_id"]
+                staging_timer = _active_browser_staging.get("_timeout_timer")
+                if staging_timer:
+                    try:
+                        staging_timer.cancel()
+                    except Exception:
+                        pass
+                _active_browser_staging = None
+
+                current_url = page.url
 
                 session = pipeline.record(page)
 
@@ -348,7 +486,7 @@ async def start_recording(
                             except Exception:
                                 pass
                             try:
-                                _active_recording["browser"].close()
+                                _active_recording["context"].close()
                             except Exception:
                                 pass
                             try:
@@ -365,35 +503,22 @@ async def start_recording(
 
                 _active_recording = {
                     "session": session,
+                    "session_id": session_id,
                     "page": page,
-                    "browser": browser,
+                    "context": context,
                     "pw": pw,
                     "_timeout_timer": timer,
                 }
 
             return json.dumps({
                 "status": "recording",
-                "session_id": "active",
-                "url": url,
-                "hint": "用户在浏览器中操作。完成后 Agent 调用 stop_recording。",
+                "session_id": session_id,
+                "current_url": current_url,
+                "hint": "录制中。用户在浏览器中操作，完成后 Agent 调用 stop_recording。",
             }, indent=2, ensure_ascii=False)
         except Exception:
-            if timer:
-                try:
-                    timer.cancel()
-                except Exception:
-                    pass
-            if browser:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-            if pw:
-                try:
-                    pw.stop()
-                except Exception:
-                    pass
             with _recording_lock:
+                _active_browser_staging = None
                 _active_recording = None
             raise
 
@@ -432,16 +557,22 @@ async def stop_recording(
                     pass
 
             session = _active_recording["session"]
-            browser = _active_recording["browser"]
+            context = _active_recording["context"]
             pw = _active_recording["pw"]
+            page = _active_recording["page"]
             _active_recording = None
 
         recording = None
         try:
+            # 刷新排队中的 expose_binding 回调（sync_playwright 调度器只在 API 调用时处理回调）
+            try:
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
             recording = session.stop()
         finally:
             try:
-                browser.close()
+                context.close()
             except Exception:
                 pass
             try:
@@ -459,9 +590,12 @@ async def stop_recording(
             encoding="utf-8",
         )
 
+        event_count = getattr(session, '_event_count', 0)
+
         return json.dumps({
             "status": "ok",
             "steps": len(recording.steps),
+            "events_received": event_count,
             "file": str(output_path.absolute()),
             "summary": [f"{s.action.value}: {s.target.label or s.target.url or ''}" for s in recording.steps],
         }, indent=2, ensure_ascii=False)
@@ -469,27 +603,8 @@ async def stop_recording(
     return await _run_pw(_sync)
 
 
-@mcp.tool()
-async def record_browser_operations(
-    url: str = "about:blank",
-    output_file: str = "recording.json",
-    adapter_config: Optional[str] = None,
-) -> str:
-    """[CLI 用] 一次性录制：打开浏览器 → 等待用户按 Enter → 停止录制。
-
-    对于 MCP/Agent 场景，推荐使用 start_recording + stop_recording 两步工具，
-    这样可以支持用户在浏览器操作后通过对话告知 Agent 完成。
-
-    参数：
-    - url: 起始页面 URL
-    - output_file: 录制输出文件路径，默认 recording.json
-    返回：录制结果摘要。
-    """
-    # 此工具在 MCP 模式下无法使用（需要 stdin 交互 + 单线程 executor 会死锁）
-    return json.dumps({
-        "error": "此工具仅在 CLI 模式下可用。MCP 模式请使用 start_recording + stop_recording 两步工具。",
-        "hint": "先调用 start_recording(url=...) 打开浏览器，用户操作完成后调用 stop_recording()。",
-    }, indent=2, ensure_ascii=False)
+# record_browser_operations 是 CLI 专用工具，不作为 MCP 工具暴露。
+# MCP/Agent 场景使用三段式: open_browser → start_recording → stop_recording
 
 
 @mcp.tool()
@@ -640,8 +755,56 @@ async def query_knowledge_base(
 
 # ── 入口 ──────────────────────────────────────────────────
 
+def _startup_check():
+    """启动时检查 Playwright 浏览器可用性，输出到 stderr（stdio 模式下不干扰 JSON-RPC）。"""
+    import sys
+    from uibridge import check_browser_available
+
+    available, info = check_browser_available("chromium")
+    if available:
+        print(f"[uibridge] Playwright 浏览器已就绪: {info}", file=sys.stderr)
+    else:
+        print(f"[uibridge] Playwright 浏览器未就绪: {info}", file=sys.stderr)
+        print("[uibridge] 请运行: playwright install chromium", file=sys.stderr)
+
+    # 检查 ffmpeg (录屏依赖，可选)
+    available_ff, ff_info = check_browser_available("firefox")
+    if not available_ff:
+        pass  # Firefox 是可选的，不告警
+
+
+@mcp.tool()
+async def check_environment() -> str:
+    """检查 uibridge 运行环境：Playwright 浏览器、依赖等是否就绪。
+
+    用于：Agent 在开始录制前验证环境，或用户排查安装问题。
+    返回：JSON 格式环境状态报告。
+    """
+    from uibridge import check_browser_available
+
+    chromium_ok, chromium_info = check_browser_available("chromium")
+    firefox_ok, firefox_info = check_browser_available("firefox")
+
+    issues = []
+    if not chromium_ok:
+        issues.append("chromium 未安装 — 运行 playwright install chromium")
+    if not firefox_ok:
+        issues.append("firefox 未安装 — 运行 playwright install firefox")
+
+    return json.dumps({
+        "status": "ok" if not issues else "issues_found",
+        "browsers": {
+            "chromium": {"available": chromium_ok, "path": chromium_info if chromium_ok else None},
+            "firefox": {"available": firefox_ok, "path": firefox_info if firefox_ok else None},
+        },
+        "issues": issues,
+        "uibridge_version": __import__("uibridge").__version__,
+    }, indent=2, ensure_ascii=False)
+
+
 def main():
     """启动 MCP Server (stdio 传输)"""
+    _startup_check()
     mcp.run(transport="stdio")
 
 

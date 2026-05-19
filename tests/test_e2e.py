@@ -346,6 +346,143 @@ class TestEndToEnd:
                 browser.close()
             pw.stop()
 
+    def test_recording_preserves_pending_callbacks(self):
+        """stop 之前应刷新排队中的 expose_binding 回调，不丢失步骤。
+
+        回归 B12：sync_playwright 调度器只在 API 调用时处理回调，
+        stop_recording 若先 _active=False 再调 page API，回调被丢弃。
+        """
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(self.html_path.as_uri())
+            page.wait_for_load_state("networkidle")
+
+            session = self.pipeline.record(page)
+
+            # 大量快速操作，部分回调可能排队
+            for i in range(10):
+                page.fill('[data-testid="search-input"]', f"query_{i}")
+                page.click('[data-testid="search-button"]')
+
+            # 关键：先 wait_for_timeout 刷新回调，再 stop
+            page.wait_for_timeout(300)
+            recording = session.stop()
+
+            assert len(recording.steps) >= 5, \
+                f"Should capture multiple steps, got {len(recording.steps)}"
+            browser.close()
+        finally:
+            pw.stop()
+
+    def test_recording_mutation_events_after_setup(self):
+        """_setup_bridge 后应刷新回调，MutationObserver 生成步骤不丢失。
+
+        回归：_setup_bridge 执行 RECORDER_JS 触发 MutationObserver，
+        回调在下次 page API 调用时才处理。若 setup 后无 API 调用，
+        mutation 步骤丢失。
+        """
+        from playwright.sync_api import sync_playwright
+
+        # 构造持续变化 DOM 的页面
+        dynamic_html = """<!DOCTYPE html>
+        <html><body>
+        <div id="container"></div>
+        <script>
+        let n = 0;
+        const c = document.getElementById('container');
+        setInterval(() => {
+            const span = document.createElement('span');
+            span.textContent = 'item_' + (++n);
+            c.appendChild(span);
+        }, 100);
+        </script>
+        </body></html>"""
+        html_path = Path(self.tmpdir) / "dynamic.html"
+        html_path.write_text(dynamic_html)
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(html_path.as_uri())
+            page.wait_for_load_state("networkidle")
+
+            session = self.pipeline.record(page)
+            # 等待 setInterval 产生 DOM 变化 + MutationObserver 触发
+            page.wait_for_timeout(1000)
+            recording = session.stop()
+
+            assert len(recording.steps) >= 1, \
+                f"Dynamic page should generate mutation steps, got {len(recording.steps)}"
+            mutations = [s for s in recording.steps
+                        if hasattr(s.action, 'value') and s.action.value == 'mutation']
+            assert len(mutations) >= 1, \
+                f"Should have at least 1 mutation step, got {len(mutations)}"
+            browser.close()
+        finally:
+            pw.stop()
+
+    def test_recording_event_count_matches_steps(self):
+        """收到的事件数应与步骤数一致（mutation 类型不丢失）。"""
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(self.html_path.as_uri())
+            page.wait_for_load_state("networkidle")
+
+            session = self.pipeline.record(page)
+            page.click('[data-testid="search-button"]')
+            page.click('[data-testid="search-button"]')
+            page.wait_for_timeout(300)
+            recording = session.stop()
+
+            assert session._event_count >= len(recording.steps), \
+                f"events {session._event_count} should >= steps {len(recording.steps)}"
+            assert len(recording.steps) >= 2, \
+                f"Expected at least 2 click steps, got {len(recording.steps)}"
+            browser.close()
+        finally:
+            pw.stop()
+
+    def test_recording_idle_page_still_captures(self):
+        """无用户操作但 recording 启动后 DOM 有变化的页面应捕获背景事件。"""
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(self.html_path.as_uri())
+            page.wait_for_load_state("networkidle")
+
+            session = self.pipeline.record(page)
+
+            # 在 recording 启动后通过 JS 动态修改 DOM 以触发 MutationObserver
+            page.evaluate("""() => {
+                const div = document.createElement('div');
+                div.id = 'dynamic';
+                div.textContent = 'added after recording start';
+                document.body.appendChild(div);
+            }""")
+            page.wait_for_timeout(500)
+
+            recording = session.stop()
+
+            assert session._event_count > 0, \
+                f"Should receive events, got {session._event_count}"
+            assert len(recording.steps) > 0, \
+                f"Events should produce steps, got {len(recording.steps)}"
+            browser.close()
+        finally:
+            pw.stop()
+
     def test_session_thread_safety(self):
         """多步操作后 stop 应正确捕获所有步骤（验证锁机制）"""
         from playwright.sync_api import sync_playwright

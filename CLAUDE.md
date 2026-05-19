@@ -40,7 +40,7 @@ uibridge 给企业 UI 自动化框架装上 AI 接口。核心思路：学习企
 | `templates/` | 企业项目接入模板（CLAUDE.md + .mcp.json + adapter.yaml） |
 | `docs/` | 用户文档（用户手册、适配器开发、录制指南、KB 维护、LLM 对接） |
 | `demo_projects/` | 4 组演示项目（Python A/B, Java C/D） |
-| `tests/` | 兼容性测试（131 个，全部通过） |
+| `tests/` | 全量测试（135 个，全部通过） |
 
 ## 文档索引
 
@@ -76,7 +76,17 @@ pip install -e .
 2. 实现 5 个接口：ComponentResolver、LocatorStrategy、ActionRecognizer、CodeGenerator、DataFormatter
 3. 在 `tests/` 添加兼容性测试
 
-完整流程见 [docs/adapter-guide.md](docs/adapter-guide.md)（Phase 1-5），含接口代码骨架、参考实现、复杂封装对策。测试数当前为 131 个，以此为准。
+完整流程见 [docs/adapter-guide.md](docs/adapter-guide.md)（Phase 1-5），含接口代码骨架、参考实现、复杂封装对策。
+
+## 测试覆盖
+
+| 场景 | 用例数 | 覆盖内容 |
+|------|--------|----------|
+| 核心引擎 | ~20 | DOM diff（9）、序列模式挖掘（6）、IR 数据结构（3）、场景分割（3） |
+| 适配器兼容性 | ~65 | 4 组适配器独立测试 + 互换测试 + Java 管线 + 风格学习 |
+| 代码生成 & 自检 | ~24 | ComponentAW/BusinessAW/TestScript 生成 + 自检修复规则 |
+| E2E 完整链路 | ~24 | 录制→分析→映射→生成→自检 + MCP 辅助函数 + 录制回调可靠性 |
+| **合计** | **135** | |
 
 ### 适配器 vs 改核心：决策树
 

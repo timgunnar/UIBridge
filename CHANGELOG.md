@@ -1,5 +1,58 @@
 # CHANGELOG
 
+## v0.3.0
+
+### 关键升级
+
+**录制交互模型重设计** — 从单工具调用改为三段式：
+- `open_browser(url)` 打开可见浏览器，不录制。用户可在此阶段预置（登录、导航等）
+- `start_recording()` 在已打开的浏览器上注入录制 JS
+- `stop_recording()` 停止录制、保存文件、关闭浏览器
+- 解决了 MCP 请求-响应模式与录制交互多回合性不匹配的根本问题
+
+**录制覆盖大幅扩展** — 从 ~10 种事件类型扩展到 ~20 种：
+- 新增 ActionType：`UNCHECK` / `SUBMIT` / `FOCUS` / `BLUR` / `DIALOG` / `CLIPBOARD` / `FILE_UPLOAD`
+- 键盘：所有功能键（Tab / Escape / 方向键 / F-键）+ 修饰键组合（Ctrl/Meta/Alt）
+- 表单：checkbox/radio/file input/range/multi-select 变更
+- 弹窗拦截：alert/confirm/prompt 自动捕获
+- 剪贴板：copy/cut/paste 事件
+- DOM 变更：MutationObserver 自动追踪
+- Tab 导航：focusin 事件追踪
+
+**浏览器模拟** — 无痕模式改为持久化 Profile：
+- `launch_persistent_context` 替代 `browser.new_context`
+- `no_viewport=True` 让页面跟随浏览器窗口大小
+- 反爬措施：`--disable-blink-features=AutomationControlled` + JS 属性覆盖
+
+### 关键 Bug 修复
+
+**录制器（3 项）**：
+- B12 事件丢失：`page.wait_for_timeout()` 在 stop_recording 和 _setup_bridge 中刷新排队回调
+- B13 录制文件路径：`_OUTPUT_BASE` 改为 `Path.cwd()`，文件保存到调用者工作目录
+- 首快照缺失：`_setup_bridge()` 中增加初始 `_capture_snapshot()`
+
+**MCP Server（3 项）**：
+- 命名空间包遮蔽：`sys.meta_path` 重新排序，可编辑 finder 优先
+- 分段浏览器超时：open_browser 添加 30 分钟超时自动关闭
+- start_recording/stop_recording 状态互斥保护
+
+**录制事件派发（1 项）**：
+- sync_playwright().start() 不维护常驻派发器 → 事件只在 Playwright API 调用时处理 → 添加 wait_for_timeout 确保回调被刷新
+
+### 新增 MCP 工具
+
+- `open_browser`：打开可见浏览器（不录制），支持用户预置
+- `check_environment`：检查 uibridge 运行环境
+
+MCP Server 工具总数：8 → 9（原有 `analyze_page` / `start_recording` / `stop_recording` / `generate_test_code` / `diff_snapshots` / `seed_knowledge_base` / `query_knowledge_base` + 新增 2）
+
+### 测试
+
+- 135 个测试全部通过（v0.2.0: 131 个）
+- 新增 4 个回归测试：回调保留、变更事件、事件计数、空闲页面捕获
+
+---
+
 ## v0.2.0
 
 ### 关键升级
@@ -55,10 +108,6 @@
 
 **知识库（1 项）**：
 - #25 Java AST 提取静默吞异常：全部替换为 `logger.debug("Error... %s", e)`
-
-### 文档修正
-
-- CLAUDE.md：修复"三层架构"表述，明确区分系统架构（3层）与代码产出（四层）
 
 ### 测试
 

@@ -82,24 +82,61 @@ RECORDER_JS = r"""
         const el = e.target;
         if (!visible(el)) return;
         const tag = (el.tagName || '').toLowerCase();
+        const typ = (el.getAttribute('type') || '').toLowerCase();
         const d = describe(el);
         d.url = location.href;
-        if (tag === 'input' || tag === 'textarea') {
+        if (tag === 'input' && typ === 'checkbox') {
+            d.checked = el.checked;
+            window.__uibridge_report('checkbox_change', JSON.stringify(d));
+        } else if (tag === 'input' && typ === 'radio') {
+            d.checked = el.checked;
+            window.__uibridge_report('radio_change', JSON.stringify(d));
+        } else if (tag === 'input' && typ === 'file') {
+            const files = [];
+            for (const f of (el.files || [])) files.push(f.name);
+            d.files = files;
+            window.__uibridge_report('file_input', JSON.stringify(d));
+        } else if (tag === 'input' && typ === 'range') {
+            d.value = el.value;
+            window.__uibridge_report('range_change', JSON.stringify(d));
+        } else if (tag === 'input' || tag === 'textarea') {
             window.__uibridge_report('input', JSON.stringify(d));
         } else if (tag === 'select') {
+            if (el.multiple) {
+                const selected = [];
+                for (const o of el.selectedOptions) selected.push(o.value || o.text);
+                d.values = selected;
+            }
             window.__uibridge_report('select', JSON.stringify(d));
         }
     }, true);
 
-    // ── Enter 键 ──────────────────────────────
+    // ── 键盘（功能键 + 组合键，普通字符不在此记录）──
+    const _FUNCTIONAL_KEYS = new Set([
+        'Enter', 'Tab', 'Escape', 'Backspace', 'Delete',
+        'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown',
+        'PageUp', 'PageDown', 'Home', 'End',
+        'F1', 'F2', 'F3', 'F4', 'F5', 'F6',
+        'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+    ]);
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            const el = e.target;
-            if (!visible(el)) return;
-            const d = describe(el);
-            d.url = location.href;
-            window.__uibridge_report('keydown', JSON.stringify({key: 'Enter', target: d}));
-        }
+        const is_mod = e.ctrlKey || e.metaKey || e.altKey;
+        // 记录：功能键 OR 带修饰键的组合键。普通可打印字符由 input/change 事件记录。
+        if (!_FUNCTIONAL_KEYS.has(e.key) && !is_mod) return;
+        // 仅修饰键（Ctrl/Shift/Alt/Meta 单独按下）不记录
+        if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+        const el = e.target;
+        const d = el ? describe(el) : {};
+        d.url = location.href;
+        window.__uibridge_report('keydown', JSON.stringify({
+            key: e.key,
+            code: e.code,
+            ctrlKey: e.ctrlKey || false,
+            shiftKey: e.shiftKey || false,
+            altKey: e.altKey || false,
+            metaKey: e.metaKey || false,
+            target: d,
+        }));
     }, true);
 
     // ── 右键 ──────────────────────────────────
@@ -163,6 +200,96 @@ RECORDER_JS = r"""
             }
         }, 500);
     }, true);
+
+    // ── 表单提交 ──────────────────────────────
+    document.addEventListener('submit', (e) => {
+        const el = e.target;
+        const tag = (el.tagName || '').toLowerCase();
+        if (tag !== 'form') return;
+        const formId = el.id || el.getAttribute('name') || '';
+        const action = el.getAttribute('action') || '';
+        const method = el.getAttribute('method') || 'get';
+        const inputs = [];
+        el.querySelectorAll('input,select,textarea').forEach(ctl => {
+            const ctlTag = (ctl.tagName || '').toLowerCase();
+            const ctlType = (ctl.getAttribute('type') || 'text').toLowerCase();
+            const name = ctl.getAttribute('name') || ctl.id || '';
+            if (!name) return;
+            if (ctlTag === 'input' && (ctlType === 'submit' || ctlType === 'button')) return;
+            inputs.push({name, value: ctl.value || '', tag: ctlTag, type: ctlType});
+        });
+        window.__uibridge_report('submit', JSON.stringify({
+            id: formId, action, method, inputs,
+            url: location.href,
+        }));
+    }, true);
+
+    // ── 焦点变化（Tab 键导航）───────────────
+    document.addEventListener('focusin', (e) => {
+        const el = e.target;
+        if (!el) return;
+        const tag = (el.tagName || '').toLowerCase();
+        const focusable = ['input', 'select', 'textarea', 'button', 'a'];
+        if (!focusable.includes(tag) && el.getAttribute('tabindex') == null) return;
+        const d = describe(el);
+        d.url = location.href;
+        window.__uibridge_report('focus', JSON.stringify(d));
+    }, true);
+
+    // ── 剪贴板 ──────────────────────────────
+    document.addEventListener('copy', (e) => {
+        const el = e.target;
+        const d = el ? describe(el) : {};
+        const selection = window.getSelection ? window.getSelection().toString().substring(0, 200) : '';
+        d.url = location.href;
+        d.clipData = selection;
+        window.__uibridge_report('clipboard', JSON.stringify({action: 'copy', target: d}));
+    }, true);
+    document.addEventListener('cut', (e) => {
+        const el = e.target;
+        const d = el ? describe(el) : {};
+        const selection = window.getSelection ? window.getSelection().toString().substring(0, 200) : '';
+        d.url = location.href;
+        d.clipData = selection;
+        window.__uibridge_report('clipboard', JSON.stringify({action: 'cut', target: d}));
+    }, true);
+    document.addEventListener('paste', (e) => {
+        const el = e.target;
+        const d = el ? describe(el) : {};
+        d.url = location.href;
+        const clipData = (e.clipboardData && e.clipboardData.getData('text'))
+            ? e.clipboardData.getData('text').substring(0, 200)
+            : '';
+        d.clipData = clipData;
+        window.__uibridge_report('clipboard', JSON.stringify({action: 'paste', target: d}));
+    }, true);
+
+    // ── 原生弹窗拦截 ────────────────────────
+    if (!window.__uibridge_dialog_patched) {
+        window.__uibridge_dialog_patched = true;
+        const _orig_alert = window.alert;
+        const _orig_confirm = window.confirm;
+        const _orig_prompt = window.prompt;
+        window.alert = function(msg) {
+            window.__uibridge_report('dialog', JSON.stringify({
+                type: 'alert', message: String(msg || ''),
+            }));
+            return _orig_alert.call(window, msg);
+        };
+        window.confirm = function(msg) {
+            window.__uibridge_report('dialog', JSON.stringify({
+                type: 'confirm', message: String(msg || ''),
+            }));
+            return _orig_confirm.call(window, msg);
+        };
+        window.prompt = function(msg, defaultText) {
+            window.__uibridge_report('dialog', JSON.stringify({
+                type: 'prompt', message: String(msg || ''),
+                defaultValue: String(defaultText || ''),
+            }));
+            return _orig_prompt.call(window, msg, defaultText);
+        };
+    }
 
     // ── SPA 路由变化 — 用 console.log 桥接（安全线程可捕获）──
     let _last_url = location.href;
@@ -282,6 +409,7 @@ class RecordingSession:
         self.steps: list[RawStep] = []
         self.snapshots: dict[str, Snapshot] = {}
         self._snap_counter = 0
+        self._event_count = 0  # 收到的事件总数（诊断用）
         self._start_time = time.time()
         self._active = True
         self._lock = threading.Lock()
@@ -315,10 +443,19 @@ class RecordingSession:
         except Exception:
             pass
 
+        # 刷新排队中的 expose_binding 回调（sync_playwright 调度器只在 API 调用时处理回调）
+        try:
+            self.page.wait_for_timeout(100)
+        except Exception:
+            pass
+
         self.page.on("framenavigated", self._on_navigate)
         self.page.on("console", self._on_console)
         self.page.on("frameattached", self._on_frame_attached)
         self.page.on("popup", self._on_popup)
+
+        # 捕获初始页面快照
+        self._capture_snapshot()
 
     # ── JS 事件处理（transport 线程，禁止调 page API）─────────
 
@@ -328,6 +465,8 @@ class RecordingSession:
             data = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
             return
+
+        self._event_count += 1
 
         snap_id = self._last_snapshot_id()
 
@@ -413,22 +552,141 @@ class RecordingSession:
 
             elif event_type == "select":
                 target = self._build_target_from_js(data)
+                values = data.get("values")
+                if values is not None:
+                    value = json.dumps(values)
+                else:
+                    value = data.get("value", "")
                 self.steps.append(RawStep(
                     id=self._step_id(),
                     action=ActionType.SELECT,
                     target=target,
-                    value=data.get("value", ""),
+                    value=value,
                     timestamp_ms=self._ts(),
                 ))
 
             elif event_type == "keydown":
                 target_data = data.get("target", {})
-                target = self._build_target_from_js(target_data) if target_data else Target(url=self.page.url)
+                target = self._build_target_from_js(target_data) if target_data else Target(url=self._current_url)
+                value = data.get("key", "")  # 只存 key 名，value 可空
+                input_type = "press"
+                if data.get("ctrlKey"):
+                    input_type = "shortcut"
                 self.steps.append(RawStep(
                     id=self._step_id(),
                     action=ActionType.KEYDOWN,
                     target=target,
-                    value="Enter",
+                    value=value,
+                    input_type=input_type,
+                    modifiers=self._modifiers_from_event(data),
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "checkbox_change":
+                target = self._build_target_from_js(data)
+                checked = data.get("checked", False)
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.CHECK if checked else ActionType.UNCHECK,
+                    target=target,
+                    value=str(checked).lower(),
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "radio_change":
+                target = self._build_target_from_js(data)
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.CHECK,
+                    target=target,
+                    value="true",
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "file_input":
+                target = self._build_target_from_js(data)
+                files = data.get("files", [])
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.FILE_UPLOAD,
+                    target=target,
+                    value=json.dumps(files),
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "range_change":
+                target = self._build_target_from_js(data)
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.INPUT,
+                    target=target,
+                    value=str(data.get("value", "")),
+                    input_type="range",
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "submit":
+                form_id = data.get("id", "")
+                form_action = data.get("action", "")
+                form_method = data.get("method", "get")
+                inputs = data.get("inputs", [])
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.SUBMIT,
+                    target=Target(
+                        label=form_id or form_action or "form",
+                        url=data.get("url", self._current_url),
+                    ),
+                    value=json.dumps({
+                        "action": form_action,
+                        "method": form_method,
+                        "inputs": inputs,
+                    }),
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "focus":
+                target = self._build_target_from_js(data)
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.FOCUS,
+                    target=target,
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "clipboard":
+                clipboard_action = data.get("action", "unknown")
+                target_data = data.get("target", {})
+                target = self._build_target_from_js(target_data) if target_data else Target(url=self._current_url)
+                clip_data = target_data.get("clipData", "") if target_data else ""
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.CLIPBOARD,
+                    target=target,
+                    value=json.dumps({"action": clipboard_action, "data": clip_data}),
+                    timestamp_ms=self._ts(),
+                    before_snapshot_id=snap_id,
+                ))
+
+            elif event_type == "dialog":
+                dialog_type = data.get("type", "alert")
+                message = data.get("message", "")
+                value = message
+                if dialog_type == "prompt":
+                    value = json.dumps({"message": message, "defaultValue": data.get("defaultValue", "")})
+                self.steps.append(RawStep(
+                    id=self._step_id(),
+                    action=ActionType.DIALOG,
+                    target=Target(label=f"{dialog_type} dialog", url=self._current_url),
+                    value=value,
+                    input_type=dialog_type,
                     timestamp_ms=self._ts(),
                     before_snapshot_id=snap_id,
                 ))
@@ -513,7 +771,7 @@ class RecordingSession:
             pass
 
     def _on_popup(self, popup):
-        """新标签页/窗口检测 — 注入录制桥接以便在新标签页中继续录制"""
+        """新标签页/窗口检测 — 注入录制桥接 + 注册所有事件监听，完全纳入录制"""
         if not self._active:
             return
         try:
@@ -528,6 +786,10 @@ class RecordingSession:
             popup.evaluate(RECORDER_JS)
         except Exception:
             pass
+        popup.on("framenavigated", self._on_navigate)
+        popup.on("console", self._on_console)
+        popup.on("frameattached", self._on_frame_attached)
+        popup.on("popup", self._on_popup)
         with self._lock:
             self.steps.append(RawStep(
                 id=self._step_id(),
@@ -537,6 +799,19 @@ class RecordingSession:
             ))
 
     # ── 目标构建 ──────────────────────────────
+
+    def _modifiers_from_event(self, data: dict) -> list[str]:
+        """从 JS 键事件数据中提取修饰键列表。"""
+        mods = []
+        if data.get("ctrlKey"):
+            mods.append("Ctrl")
+        if data.get("shiftKey"):
+            mods.append("Shift")
+        if data.get("altKey"):
+            mods.append("Alt")
+        if data.get("metaKey"):
+            mods.append("Meta")
+        return mods
 
     def _build_target_from_js(self, data: dict) -> Target:
         return Target(

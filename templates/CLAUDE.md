@@ -27,18 +27,19 @@
 }
 ```
 
-注册后 Agent 自动获得 8 个类型化工具：
+注册后 Agent 自动获得 9 个类型化工具：
 
 | MCP 工具 | 参数 | 用途 |
 |---------|------|------|
-| `analyze_page` | `url`, `adapter_config?` | 分析页面，发现组件 |
-| `start_recording` | `url`, `adapter_config?` | 开始交互式录制（打开浏览器） |
+| `analyze_page` | `url`, `adapter_config?` | 分析页面组件（无头浏览器，独立于录制） |
+| `open_browser` | `url` | 打开可见浏览器（不录制），用户做预置操作 |
+| `start_recording` | `adapter_config?` | 在已打开的浏览器上开始录制 |
 | `stop_recording` | `output_file?` | 停止录制，保存文件，关闭浏览器 |
-| `record_browser_operations` | `url`, `output_file?` | [CLI 用] 一次性录制（按 Enter 结束） |
 | `generate_test_code` | `input_file?`, `output_dir?`, `adapter_config?` | 生成测试代码 + 自检 |
 | `diff_snapshots` | `input_file?` | 对比快照，生成断言候选 |
 | `seed_knowledge_base` | `project_dir` | 扫描源码播种 KB |
 | `query_knowledge_base` | `query`, `project_dir?` | 查询框架约定 |
+| `check_environment` | (无) | 检查 Playwright 浏览器等运行环境 |
 
 ### 方式 B: CLI 命令（兜底）
 
@@ -69,17 +70,22 @@
 3. 调用 `seed_knowledge_base(project_dir=".")` 扫描源码播种 KB
 4. 报告发现了多少组件、页面、约定
 
-### 录制新功能测试（交互式两步曲）
+### 录制新功能测试（三段式）
 
-1. 调用 `analyze_page(url=...)` 了解页面组件
-2. 调用 `start_recording(url=...)` 打开浏览器，开始录制
-3. 告诉用户"浏览器已打开，请在浏览器中操作，完成后告诉我"
-4. **等待用户告知完成**（用户操作完成后会在对话中说"好了"/"完成"）
-5. 调用 `stop_recording()` 结束录制，保存 recording.json
-6. 调用 `generate_test_code()` 生成代码 + 自检
-7. 将生成的代码从 `generated/` 移动到正确的 Maven 目录
-8. 如有自检失败，分析原因并修复
-9. 报告用户结果。鼓励用户审查生成的代码，如有问题告知 Agent 修正。
+**关键原则：录制全程只用 uibridge 的浏览器，不要用 Playwright MCP 的 `browser_navigate`。**
+
+1. 调用 `analyze_page(url=...)` 了解页面组件（无头浏览器，不影响录制）
+2. 调用 `open_browser(url=...)` 打开可见浏览器（此时不录制）
+3. 告诉用户"浏览器已打开，请先做预置操作（登录、导航等），准备好后告诉我"
+4. **等待用户告知预置完成**
+5. 调用 `start_recording()` 在已打开的浏览器上开始录制
+6. 告诉用户"录制中，请操作。完成后告诉我"
+7. **等待用户告知操作完成**
+8. 调用 `stop_recording()` 结束录制，保存 recording.json
+9. 调用 `generate_test_code()` 生成代码 + 自检
+10. 将生成的代码从 `generated/` 移动到正确的 Maven 目录
+11. 如有自检失败，分析原因并修复
+12. 报告用户结果。鼓励用户审查生成的代码，如有问题告知 Agent 修正。
 
 ### 维护已有测试
 
