@@ -89,47 +89,9 @@ def _sanitize_input_path(raw: str) -> Path:
 
 
 def _load_adapter(adapter_config_path: Optional[str] = None):
-    """加载适配器的 5 个接口实例"""
-    from uibridge.adapter.reference import (
-        ReferenceComponentResolver,
-        ReferenceLocatorStrategy,
-        ReferenceActionRecognizer,
-        ReferenceCodeGenerator,
-        ReferenceDataFormatter,
-    )
-
-    if adapter_config_path:
-        config_path = Path(adapter_config_path)
-        if config_path.exists():
-            raw = config_path.read_text("utf-8")
-            if config_path.suffix in (".yaml", ".yml"):
-                config = yaml.safe_load(raw)
-            else:
-                config = json.loads(raw)
-            components = config.get("adapter", {}).get("components", {})
-            if components:
-                import importlib
-
-                def load_cls(cls_path: str):
-                    module_path, class_name = cls_path.rsplit(".", 1)
-                    module = importlib.import_module(module_path)
-                    return getattr(module, class_name)()
-
-                return (
-                    load_cls(components.get("resolver", "")),
-                    load_cls(components.get("locator", "")),
-                    load_cls(components.get("recognizer", "")),
-                    load_cls(components.get("generator", "")),
-                    load_cls(components.get("data_formatter", "")),
-                )
-
-    return (
-        ReferenceComponentResolver(),
-        ReferenceLocatorStrategy(),
-        ReferenceActionRecognizer(),
-        ReferenceCodeGenerator(),
-        ReferenceDataFormatter(),
-    )
+    """加载适配器的 5 个接口实例（委托给共享工厂）"""
+    from uibridge.adapter.loader import load_adapter
+    return load_adapter(adapter_config_path)
 
 
 def _detect_source_dirs(project_dir: str) -> dict[str, str]:
@@ -646,7 +608,7 @@ async def generate_test_code(
 
     output = []
     for r in results:
-        ext = ".java" if "java" in str(type(pipeline.code_generator)).lower() else ".py"
+        ext = ".java" if getattr(pipeline.code_generator, "target_language", "python") == "java" else ".py"
         test_file = out_dir / f"{r['test_name']}{ext}"
         test_file.write_text(r["code"], encoding="utf-8")
 

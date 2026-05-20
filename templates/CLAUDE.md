@@ -96,7 +96,7 @@
 
 ## 自定义适配器（预置适配器不匹配时）
 
-如果 `.uibridge/adapter.yaml` 中配置的 4 组预置适配器（reference / screenplay / java_testng / java_fluent）都不匹配本项目的框架风格，Agent 需要判断**改什么**。
+如果 `.uibridge/adapter.yaml` 中配置的 5 组预置适配器（reference / screenplay / java_testng / java_fluent / custom_playwright_java）都不匹配本项目的框架风格，Agent 需要判断**改什么**。
 
 ### 决策树：按这个顺序判断
 
@@ -133,7 +133,7 @@ python -c "import uibridge; from pathlib import Path; print(Path(uibridge.__file
 该目录下包含：
 - `docs/adapter-guide.md` — **适配器开发完整指南（必读，含 4 个 Phase 的详细步骤）**
 - `uibridge/adapter/base.py` — 5 个接口定义 + 数据结构
-- `uibridge/adapter/` — 4 组已有适配器参考实现
+- `uibridge/adapter/` — 5 组已有适配器参考实现
 - `docs/` — 完整文档（用户手册、KB 维护、LLM 对接等）
 
 ### 第二步：按 docs/adapter-guide.md 的 4 个 Phase 执行

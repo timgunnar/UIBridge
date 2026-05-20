@@ -1,5 +1,6 @@
 """自检引擎 — 生成脚本后立即执行验证。支持 pytest (Python) 和 mvn test (Java)。"""
 
+import sys
 import tempfile
 import subprocess
 import time
@@ -34,12 +35,14 @@ class SelfTestRunner:
 
     def _run_python(self, code: str, test_name: str) -> SelfTestResult:
         start = time.time()
-        tmp_file = Path(tempfile.gettempdir()) / f"uibridge_gen_{test_name}.py"
+        tmp_dir = Path(tempfile.mkdtemp(prefix="uibridge_test_"))
+        tmp_file = tmp_dir / f"{test_name}.py"
         tmp_file.write_text(code, encoding="utf-8")
 
         try:
             proc = subprocess.run(
-                ["pytest", str(tmp_file), "-v", "--tb=short", "--no-header"],
+                [sys.executable, "-m", "pytest", str(tmp_file), "-v", "--tb=short", "--no-header",
+                 "--rootdir", str(tmp_dir)],
                 capture_output=True, text=True, timeout=self.timeout,
                 encoding="utf-8", errors="replace",
             )
@@ -66,7 +69,8 @@ class SelfTestRunner:
         )
         if not passed:
             result.fix_suggestion = self._analyze_failure_python(stdout, stderr)
-        tmp_file.unlink(missing_ok=True)
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return result
 
     def _run_java(self, code: str, test_name: str, project_dir: str = "") -> SelfTestResult:

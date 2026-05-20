@@ -75,6 +75,7 @@ flowchart LR
 | `screenplay` | Python | pytest | Screenplay Pattern (Actor/Task/Question) |
 | `java_testng` | Java | TestNG + Maven | Page Object + WebDriver + Assert (自动检测 JUnit 5) |
 | `java_fluent` | Java | TestNG + Maven | Fluent API + PageFactory + AssertJ |
+| `custom_playwright_java` | Java | TestNG + Maven | Playwright + Page Object + AssertJ |
 
 不在表中？AI Agent 自主分析项目并完成适配器开发，无需你写代码。详见 [适配器开发指南](docs/adapter-guide.md)。
 
@@ -90,7 +91,7 @@ playwright install chromium
 
 # 2. 验证
 uibridge --help
-python -m pytest tests/ -v   # 135 个测试，覆盖核心引擎/适配器/代码生成/E2E
+python -m pytest tests/ -v   # 186 个测试，覆盖核心引擎/适配器/代码生成/E2E
 
 # 3. 卸载
 uibridge cleanup --yes    # 清理项目中所有生成文件
@@ -124,8 +125,12 @@ sequenceDiagram
     participant B as 浏览器
 
     U->>A: "帮我测用户管理搜索"
+    A->>B: open_browser()
+    A->>U: "浏览器已打开，请做预置操作"
+    U->>B: [预置：登录、导航]
+    U->>A: "好了"
     A->>B: start_recording()
-    A->>U: "浏览器已打开，请操作"
+    A->>U: "录制中，请操作"
     U->>B: [操作：输入、点击、查看]
     U->>A: "好了"
     A->>B: stop_recording()

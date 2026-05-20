@@ -2,6 +2,8 @@
 
 import re
 
+from jinja2 import Environment, BaseLoader
+
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
@@ -9,7 +11,11 @@ from .base import (
     BAWDef, BAWOperationDef, CallDef,
     ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
+    sanitize_identifier,
 )
+
+_JINJA_ENV = Environment(loader=BaseLoader())
+_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -222,19 +228,8 @@ class ReferenceComponentResolver(ComponentResolver):
     def __init__(self, kb_manager=None):
         self.kb = kb_manager
 
-    def _get_aria_map(self) -> dict:
-        """Query KB for ARIA role map, fall back to hardcoded defaults."""
-        if self.kb:
-            kb_result = self.kb.get_component_type("table", {})
-            if kb_result:
-                # Extract full ARIA role map from KB conventions
-                for item in self.kb.store.list_category("conventions"):
-                    if "component_types" in item.key:
-                        return item.value.get("aria_role_map", self.ARIA_MAP)
-        return self.ARIA_MAP
-
     def resolve_type(self, aria_role: str, dom_attrs: dict, snapshot_context: str) -> str:
-        aria_map = self._get_aria_map()
+        aria_map = self._resolve_aria_map()
         # 1. 从属性推断
         data_module = dom_attrs.get("data-module", "")
         if data_module:
@@ -288,7 +283,7 @@ class ReferenceComponentResolver(ComponentResolver):
         return self.ARIA_MAP.get(aria_role, "UnknownAW")
 
     def _extract_domain(self, url: str) -> str:
-        match = re.search(r'/(\w+)/(manage|list|create|edit|detail)', url)
+        match = _DOMAIN_RE.search(url)
         if match:
             return match.group(1)
         parts = url.rstrip("/").split("/")
@@ -308,11 +303,7 @@ class ReferenceLocatorStrategy(LocatorStrategy):
         self.kb = kb_manager
 
     def get_locator_priority(self) -> list[str]:
-        if self.kb:
-            kb_conventions = self.kb.get_locator_conventions()
-            if kb_conventions and "priority" in kb_conventions:
-                return kb_conventions["priority"]
-        return self.PRIORITY
+        return self._resolve_locator_priority()
 
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
@@ -405,14 +396,17 @@ class ReferenceActionRecognizer(ActionRecognizer):
             return {}
         first = buffer[0]
 
-        # 提取目标标签
+        # 提取目标标签和 tag（用于标识符清洗回退）
         target_label = ""
+        target_tag = ""
         if isinstance(first, dict):
             t = first.get("target", {})
             if isinstance(t, dict):
                 target_label = t.get("label", "")
+                target_tag = t.get("tag", "")
         elif hasattr(first, 'target') and first.target:
             target_label = first.target.label or ""
+            target_tag = first.target.tag or ""
 
         # 提取值
         value = ""
@@ -423,7 +417,7 @@ class ReferenceActionRecognizer(ActionRecognizer):
 
         base = {
             "raw_steps": list(buffer),
-            "component": target_label.replace(" ", "_").lower() if target_label else "page",
+            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
             "value": value,
         }
 
@@ -432,35 +426,10 @@ class ReferenceActionRecognizer(ActionRecognizer):
         return {**base, "type": "single_action", "action": action_type, "steps": len(buffer)}
 
     def recognize_pattern(self, sequences: list) -> list[dict]:
-        """PrefixSpan 频繁子序列挖掘 — 发现可封装的 BAW 模式"""
-        if len(sequences) < 3:
-            return []
-
-        # 将序列转为 action 名称列表
-        action_seqs = []
-        for seq in sequences:
-            actions = []
-            if isinstance(seq, list):
-                for item in seq:
-                    if isinstance(item, dict):
-                        actions.append(item.get("action", "?"))
-                    else:
-                        actions.append(str(item))
-            action_seqs.append(actions)
-
-        miner = _PrefixSpan(min_support=3, max_length=8)
-        frequent_patterns = miner.mine(action_seqs)
-
-        patterns = []
-        for pattern, count in frequent_patterns:
-            pattern_key = " → ".join(pattern)
-            patterns.append({
-                "pattern": pattern_key,
-                "actions": list(pattern),
-                "frequency": count,
-                "suggestion": f"建议封装为 BusinessAW (出现 {count} 次)",
-            })
-
+        """PrefixSpan 频繁子序列挖掘 — 发现可封装的 BAW 模式（中文建议）"""
+        patterns = super().recognize_pattern(sequences)
+        for p in patterns:
+            p["suggestion"] = f"建议封装为 BusinessAW (出现 {p['frequency']} 次)"
         return patterns
 
 
@@ -478,28 +447,20 @@ class ReferenceCodeGenerator(CodeGenerator):
         self.kb = kb_manager
 
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(COMPONENT_AW_TEMPLATE)
+        template = _JINJA_ENV.from_string(COMPONENT_AW_TEMPLATE)
         return template.render(comp=comp_def)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(BUSINESS_AW_TEMPLATE)
+        template = _JINJA_ENV.from_string(BUSINESS_AW_TEMPLATE)
         return template.render(baw=baw_def)
 
     def generate_test_script(self, script_def: ScriptDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(TEST_SCRIPT_TEMPLATE)
+        template = _JINJA_ENV.from_string(TEST_SCRIPT_TEMPLATE)
         return template.render(s=script_def)
 
     def generate_test_data(self, data_def: TestDataDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        env.filters["repr"] = lambda v: repr(v)
-        template = env.from_string(TEST_DATA_TEMPLATE)
+        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = _JINJA_ENV.from_string(TEST_DATA_TEMPLATE)
         return template.render(d=data_def)
 
     def get_import_style(self) -> ImportStyle:
@@ -561,8 +522,8 @@ class ReferenceCodeGenerator(CodeGenerator):
             call = step.calls[0]
             msg = call.args[0] if call.args else step.comment
             if msg:
-                return f"# assert: {msg}"
-            return "# assert: page state changed as expected"
+                return f'assert True, f"TODO: assert {msg}"'
+            return 'assert True, "TODO: assert page state changed as expected"'
 
         comment = getattr(step, 'comment', '')
         if comment:
@@ -606,7 +567,7 @@ COMPONENT_AW_TEMPLATE = '''# [AUTO-GEN] 组件: {{ comp.class_name }}
 from aaw.base_aw import BaseAW
 
 
-class {{ comp.class_name }}(BaseAW):
+class {{ comp.class_name }}({{ comp.base_class }}):
     """{{ comp.class_name }} — 自动生成的组件 AW"""
 
     def __init__(self, page, xpath: str):

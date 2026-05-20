@@ -13,18 +13,37 @@ class KnowledgeSource(Enum):
     PATTERN_MINING = "pattern_mining"        # 0.5-0.7 confidence
     LLM_INFERENCE = "llm_inference"          # 0.4-0.6 confidence
 
+    @property
+    def default_decay_rate(self) -> float:
+        """Daily confidence decay rate. 0 = no auto-decay."""
+        return {
+            KnowledgeSource.HUMAN_INJECTION: 0.0,
+            KnowledgeSource.STATIC_ANALYSIS: 0.003,
+            KnowledgeSource.RUNTIME_ANALYSIS: 0.002,
+            KnowledgeSource.PATTERN_MINING: 0.01,
+            KnowledgeSource.LLM_INFERENCE: 0.008,
+        }.get(self, 0.005)
+
 
 @dataclass
 class Confidence:
-    """Confidence score with dynamic adjustment, decay, and manual override."""
+    """Confidence score with automatic time-based decay.
+
+    decay_rate defaults from KnowledgeSource.default_decay_rate.
+    Set decay_rate=0 to opt out of decay for a specific item.
+    """
     score: float = 0.5
     source: KnowledgeSource = KnowledgeSource.LLM_INFERENCE
     self_test_passes: int = 0
     self_test_failures: int = 0
-    last_validated_at: float = 0.0
-    decay_rate: float = 0.0  # points per day, 0 = no decay
+    last_validated_at: float = field(default_factory=time.time)
+    decay_rate: Optional[float] = None  # None = use source default
     manual_override: Optional[float] = None
     history: list[dict] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.decay_rate is None:
+            self.decay_rate = self.source.default_decay_rate
 
     @property
     def effective_score(self) -> float:

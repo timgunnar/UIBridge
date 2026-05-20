@@ -1,4 +1,8 @@
-"""Java TestNG 适配器 — Java + TestNG + Maven + Page Object 模式"""
+"""Playwright Java TestNG 适配器 — Playwright + Java + TestNG + Maven + 四层分层架构
+
+Component AW → Business AW → Test Data → Test Scripts
+每一层都使用 Playwright 语义，而非 Selenium。
+"""
 
 import re
 from pathlib import Path
@@ -26,101 +30,101 @@ _DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 # ═══════════════════════════════════════════════════════════════
-# JavaComponentResolver
+# PlaywrightComponentResolver
 # ═══════════════════════════════════════════════════════════════
 
-class JavaComponentResolver(ComponentResolver):
-    """基于 ARIA role 映射为 Java Page Object 中的组件类型"""
+class PlaywrightComponentResolver(ComponentResolver):
+    """ARIA role → Playwright 风格的 ComponentAW 类型"""
 
     ARIA_MAP = {
-        "table": "WebTable", "grid": "WebTable", "treegrid": "WebTable",
-        "form": "WebForm", "dialog": "WebDialog",
-        "combobox": "WebDropdown", "listbox": "WebDropdown",
-        "menu": "WebMenu", "menubar": "WebMenu",
-        "tablist": "WebTab", "tree": "WebTree",
-        "navigation": "WebNav",
-        "button": "WebButton", "link": "WebLink",
-        "textbox": "WebInput", "searchbox": "WebInput",
-        "checkbox": "WebCheckbox", "radio": "WebRadio",
-        "alert": "WebAlert", "banner": "WebBanner",
+        "table": "TableAW", "grid": "TableAW", "treegrid": "TableAW",
+        "form": "FormAW", "dialog": "DialogAW",
+        "combobox": "DropdownAW", "listbox": "DropdownAW",
+        "menu": "MenuAW", "menubar": "MenuAW",
+        "tablist": "TabAW", "tree": "TreeAW",
+        "navigation": "NavAW",
+        "button": "ButtonAW", "link": "LinkAW",
+        "textbox": "InputAW", "searchbox": "SearchBoxAW",
+        "checkbox": "CheckboxAW", "radio": "RadioAW",
+        "alert": "AlertAW", "banner": "BannerAW",
     }
 
     METHOD_TEMPLATES = {
-        "WebTable": [
+        "TableAW": [
             MethodTemplate("waitForLoad", [], "wait"),
             MethodTemplate("clickRow", [{"name": "index", "type": "int"}], "click"),
             MethodTemplate("getRowCount", [], "read", "int"),
             MethodTemplate("getCellText", [{"name": "row", "type": "int"}, {"name": "col", "type": "int"}], "read", "String"),
             MethodTemplate("assertRowContains", [{"name": "text", "type": "String"}], "assertion"),
-            MethodTemplate("filterByColumn", [{"name": "col", "type": "int"}, {"name": "value", "type": "String"}], "input"),
         ],
-        "WebForm": [
+        "FormAW": [
             MethodTemplate("waitForLoad", [], "wait"),
             MethodTemplate("submit", [], "click"),
             MethodTemplate("reset", [], "click"),
-            MethodTemplate("assertFieldError", [{"name": "field", "type": "String"}], "assertion"),
         ],
-        "WebInput": [
-            MethodTemplate("enter", [{"name": "text", "type": "String"}], "input"),
+        "InputAW": [
+            MethodTemplate("fill", [{"name": "text", "type": "String"}], "input"),
+            MethodTemplate("type", [{"name": "text", "type": "String"}], "input"),
             MethodTemplate("clear", [], "input"),
             MethodTemplate("getValue", [], "read", "String"),
-            MethodTemplate("assertValue", [{"name": "expected", "type": "String"}], "assertion"),
+            MethodTemplate("assertHasValue", [{"name": "expected", "type": "String"}], "assertion"),
         ],
-        "WebButton": [
+        "SearchBoxAW": [
+            MethodTemplate("search", [{"name": "keyword", "type": "String"}], "input"),
+            MethodTemplate("typeKeyword", [{"name": "keyword", "type": "String"}], "input"),
+            MethodTemplate("clickSearch", [], "click"),
+        ],
+        "ButtonAW": [
             MethodTemplate("click", [], "click"),
+            MethodTemplate("dblClick", [], "click"),
             MethodTemplate("assertEnabled", [], "assertion"),
             MethodTemplate("assertDisabled", [], "assertion"),
         ],
-        "WebDropdown": [
-            MethodTemplate("selectByValue", [{"name": "value", "type": "String"}], "select"),
+        "DropdownAW": [
+            MethodTemplate("selectOption", [{"name": "value", "type": "String"}], "select"),
             MethodTemplate("getSelected", [], "read", "String"),
             MethodTemplate("assertSelected", [{"name": "expected", "type": "String"}], "assertion"),
         ],
-        "WebDialog": [
+        "DialogAW": [
             MethodTemplate("waitForVisible", [], "wait"),
             MethodTemplate("confirm", [], "click"),
             MethodTemplate("cancel", [], "click"),
             MethodTemplate("getMessage", [], "read", "String"),
         ],
-        "WebMenu": [
+        "MenuAW": [
             MethodTemplate("clickItem", [{"name": "label", "type": "String"}], "click"),
-            MethodTemplate("assertItemVisible", [{"name": "label", "type": "String"}], "assertion"),
         ],
-        "WebTab": [
+        "TabAW": [
             MethodTemplate("select", [{"name": "tabName", "type": "String"}], "click"),
             MethodTemplate("assertSelected", [{"name": "tabName", "type": "String"}], "assertion"),
         ],
-        "WebTree": [
-            MethodTemplate("expand", [{"name": "node", "type": "String"}], "click"),
-            MethodTemplate("clickNode", [{"name": "label", "type": "String"}], "click"),
-            MethodTemplate("assertNodeVisible", [{"name": "label", "type": "String"}], "assertion"),
-        ],
-        "WebNav": [
-            MethodTemplate("goTo", [{"name": "section", "type": "String"}], "click"),
-            MethodTemplate("assertActive", [{"name": "section", "type": "String"}], "assertion"),
-        ],
-        "WebLink": [
+        "LinkAW": [
             MethodTemplate("click", [], "click"),
             MethodTemplate("getUrl", [], "read", "String"),
-            MethodTemplate("assertHrefContains", [{"name": "text", "type": "String"}], "assertion"),
         ],
-        "WebCheckbox": [
+        "CheckboxAW": [
             MethodTemplate("check", [], "click"),
             MethodTemplate("uncheck", [], "click"),
             MethodTemplate("isChecked", [], "read", "boolean"),
             MethodTemplate("assertChecked", [], "assertion"),
         ],
-        "WebRadio": [
+        "RadioAW": [
             MethodTemplate("select", [{"name": "value", "type": "String"}], "click"),
-            MethodTemplate("getSelected", [], "read", "String"),
             MethodTemplate("assertSelected", [{"name": "expected", "type": "String"}], "assertion"),
         ],
-        "WebAlert": [
+        "AlertAW": [
             MethodTemplate("getText", [], "read", "String"),
             MethodTemplate("accept", [], "click"),
             MethodTemplate("dismiss", [], "click"),
         ],
-        "WebBanner": [
+        "NavAW": [
+            MethodTemplate("goTo", [{"name": "section", "type": "String"}], "click"),
+        ],
+        "TreeAW": [
+            MethodTemplate("expand", [{"name": "node", "type": "String"}], "click"),
+            MethodTemplate("clickNode", [{"name": "label", "type": "String"}], "click"),
+        ],
+        "BannerAW": [
             MethodTemplate("assertVisible", [], "assertion"),
             MethodTemplate("getText", [], "read", "String"),
         ],
@@ -139,11 +143,11 @@ class JavaComponentResolver(ComponentResolver):
             return aria_map[role_lower]
         tag = dom_attrs.get("tag", "").lower()
         tag_map = {
-            "input": "WebInput", "select": "WebDropdown",
-            "button": "WebButton", "a": "WebLink",
-            "textarea": "WebInput", "table": "WebTable",
+            "input": "InputAW", "select": "DropdownAW",
+            "button": "ButtonAW", "a": "LinkAW",
+            "textarea": "InputAW", "table": "TableAW",
         }
-        return tag_map.get(tag, "WebElement")
+        return tag_map.get(tag, "BaseComponentAW")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
         domain = self._extract_domain(url)
@@ -162,14 +166,14 @@ class JavaComponentResolver(ComponentResolver):
     def _guess_from_name(self, attr_value: str, aria_role: str) -> str:
         lower = attr_value.lower()
         if any(k in lower for k in ("table", "grid", "list")):
-            return "WebTable"
+            return "TableAW"
         if any(k in lower for k in ("form", "edit", "create")):
-            return "WebForm"
+            return "FormAW"
         if any(k in lower for k in ("select", "dropdown", "combo", "picker")):
-            return "WebDropdown"
+            return "DropdownAW"
         if any(k in lower for k in ("dialog", "modal", "popup")):
-            return "WebDialog"
-        return self.ARIA_MAP.get(aria_role, "WebElement")
+            return "DialogAW"
+        return self.ARIA_MAP.get(aria_role, "BaseComponentAW")
 
     def _extract_domain(self, url: str) -> str:
         match = _DOMAIN_RE.search(url)
@@ -180,57 +184,89 @@ class JavaComponentResolver(ComponentResolver):
 
 
 # ═══════════════════════════════════════════════════════════════
-# JavaLocatorStrategy
+# PlaywrightLocatorStrategy
 # ═══════════════════════════════════════════════════════════════
 
-class JavaLocatorStrategy(LocatorStrategy):
-    """Java Selenium 定位策略: @FindBy 注解风格"""
+class PlaywrightLocatorStrategy(LocatorStrategy):
+    """Playwright 定位策略: page.locator() + CSS/text/role 选择器"""
 
-    PRIORITY = ["id", "name", "xpath", "cssSelector"]
-
-    def __init__(self, kb_manager=None):
-        self.kb = kb_manager
+    PRIORITY = ["id", "placeholder", "aria-label", "text", "css", "xpath"]
 
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
+        """生成 Playwright 定位字符串（优先 CSS/text，其次 xpath）"""
         attrs = element_info.attrs
+
+        # 1. 向上查找最近的 data-module 祖先
         for ancestor in element_info.ancestor_chain:
             anc_attrs = ancestor.get("attrs", {})
             if "data-module" in anc_attrs:
                 module = anc_attrs["data-module"]
-                return f"//*[@data-module='{module}']//{element_info.tag}[@{self._best_attr(attrs)}='{attrs.get(self._best_attr(attrs))}']"
-        for attr in ["id", "name", "data-testid", "data-module"]:
-            if attr in attrs and attrs[attr]:
-                return f"//{element_info.tag}[@{attr}='{attrs[attr]}']"
-        if element_info.text:
-            return f"//{element_info.tag}[contains(text(), '{element_info.text[:30]}')]"
+                best = self._best_attr(attrs)
+                if best and attrs.get(best):
+                    return f"[data-module='{module}'] [{best}='{attrs[best]}']"
+                return f"[data-module='{module}']"
+
+        # id 优先
+        if "id" in attrs and attrs["id"]:
+            return f"#{attrs['id']}"
+
+        # data-testid
+        if "data-testid" in attrs and attrs["data-testid"]:
+            return f"[data-testid='{attrs['data-testid']}']"
+
+        # name
+        if "name" in attrs and attrs["name"]:
+            return f"[name='{attrs['name']}']"
+
+        # placeholder
+        if "placeholder" in attrs and attrs["placeholder"]:
+            return f"[placeholder='{attrs['placeholder']}']"
+
+        # aria-label
+        if "aria-label" in attrs and attrs["aria-label"]:
+            return f"[aria-label='{attrs['aria-label']}']"
+
+        # 文本定位 — Playwright 特色
+        if element_info.text and len(element_info.text) < 50:
+            return f'text="{element_info.text}"'
+
+        # 类名
+        if "class" in attrs and attrs["class"]:
+            classes = attrs["class"].split()
+            if classes:
+                return f".{classes[0]}"
+
         return ""
 
-    def extract_feature_point(self, xpath: str) -> dict:
-        for attr in ["id", "name", "data-module", "data-testid"]:
-            match = re.search(rf"@{attr}=['\"]([^'\"]+)['\"]", xpath)
-            if match:
-                return {"type": attr, "value": match.group(1)}
-        match = re.search(r"contains\([., ]'([^']+)'\)", xpath)
-        if match:
-            return {"type": "text-contains", "value": match.group(1)}
-        return {"type": "xpath", "value": xpath}
+    def _best_attr(self, attrs: dict) -> str:
+        for attr in ["data-testid", "id", "name", "placeholder", "aria-label"]:
+            if attr in attrs and attrs[attr]:
+                return attr
+        return ""
+
+    def extract_feature_point(self, selector: str) -> dict:
+        if selector.startswith("#"):
+            return {"type": "id", "value": selector[1:]}
+        if selector.startswith("[data-testid="):
+            return {"type": "data-testid", "value": selector.split("=")[1].strip("[]'\"")}
+        if selector.startswith("[name="):
+            return {"type": "name", "value": selector.split("=")[1].strip("[]'\"")}
+        if selector.startswith("text="):
+            return {"type": "text", "value": selector[5:].strip('"')}
+        if selector.startswith("."):
+            return {"type": "class", "value": selector[1:]}
+        return {"type": "selector", "value": selector}
 
     def get_locator_priority(self) -> list[str]:
         return self._resolve_locator_priority()
 
-    def _best_attr(self, attrs: dict) -> str:
-        for attr in ["id", "name", "data-testid"]:
-            if attr in attrs and attrs[attr]:
-                return attr
-        return "class"
-
 
 # ═══════════════════════════════════════════════════════════════
-# JavaActionRecognizer
+# PlaywrightActionRecognizer
 # ═══════════════════════════════════════════════════════════════
 
-class JavaActionRecognizer(ActionRecognizer):
-    """将 DOM 操作序列聚合为 Java Page Object 方法调用"""
+class PlaywrightActionRecognizer(ActionRecognizer):
+    """DOM 操作序列 → Playwright 方法调用聚合"""
 
     def aggregate(self, raw_steps: list, page_context: dict) -> list:
         actions = []
@@ -299,19 +335,24 @@ class JavaActionRecognizer(ActionRecognizer):
             "value": value,
         }
         if action_type == "input" and len(buffer) >= 2:
-            return {**base, "type": "composite_action", "action": "enterAndSubmit", "steps": len(buffer)}
+            return {**base, "type": "composite_action", "action": "fillAndSubmit", "steps": len(buffer)}
         return {**base, "type": "single_action", "action": action_type, "steps": len(buffer)}
 
+    def recognize_pattern(self, sequences: list) -> list[dict]:
+        patterns = super().recognize_pattern(sequences)
+        for p in patterns:
+            p["suggestion"] = f"建议包装为 BusinessAW（出现 {p['frequency']} 次）"
+        return patterns
 
 
 # ═══════════════════════════════════════════════════════════════
-# JavaCodeGenerator
+# PlaywrightCodeGenerator
 # ═══════════════════════════════════════════════════════════════
 
-class JavaCodeGenerator(CodeGenerator):
-    """生成 Java + TestNG/JUnit5 + Selenium 风格代码"""
+class PlaywrightCodeGenerator(CodeGenerator):
+    """生成 Playwright + Java + TestNG 风格代码，融入四层分层架构"""
     target_language = "java"
-    default_base_class = "BaseComponent"
+    default_base_class = "BaseComponentAW"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None,
                  base_page_class: str = "BasePage", test_framework: str = "testng"):
@@ -320,22 +361,11 @@ class JavaCodeGenerator(CodeGenerator):
             self.package = package_name
         else:
             pkg = self._resolve_package()
-            if pkg is None:
-                self.package = "com.acme"
-            else:
-                self.package = pkg  # "" 表示默认包
+            self.package = pkg if pkg is not None else "com.baidu.test"
         self.base_page = base_page_class
-        self.test_framework = test_framework  # "testng" | "junit5" | "junit4"
-        self._detect_framework()
+        self.test_framework = test_framework
 
     def _resolve_package(self) -> Optional[str]:
-        """从 KB 或源码扫描检测项目包名。
-
-        返回值：
-        - 包名字符串：检测到统一包名
-        - ""（空字符串）：默认包（无 package 声明）
-        - None：无法检测
-        """
         packages: set[str] = set()
         if self.kb:
             for item in self.kb.store.list_category("conventions"):
@@ -360,122 +390,69 @@ class JavaCodeGenerator(CodeGenerator):
                     common = common[:i]
                 if common:
                     return ".".join(common)
-
-        # 源码扫描兜底
         if self.kb and hasattr(self.kb, 'project_root'):
             result = scan_java_source_for_package(str(self.kb.project_root))
             if result is not None:
                 return result
-
         return None
 
-    def _detect_framework(self):
-        """从 KB 或项目源码自动检测测试框架"""
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "test_framework" in item.key:
-                    self.test_framework = item.value.get("type", "testng")
-                    return
-        # 从项目源码检测
-        if self.kb and hasattr(self.kb, 'project_root'):
-            test_dir = self.kb.project_root / "src" / "test" / "java"
-            if test_dir.exists():
-                import glob
-                for f in list(test_dir.glob("**/*.java"))[:20]:
-                    try:
-                        content = f.read_text(encoding="utf-8")
-                        if "org.junit.jupiter" in content:
-                            self.test_framework = "junit5"
-                            return
-                        if "org.junit.Test" in content:
-                            self.test_framework = "junit4"
-                            return
-                    except Exception:
-                        pass
+    # ── 四个生成方法 ──────────────────────────
 
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
         _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(JAVA_COMPONENT_TEMPLATE)
+        template = _JINJA_ENV.from_string(PLAYWRIGHT_COMPONENT_TEMPLATE)
         return post_process_java_code(template.render(comp=comp_def, package=self.package), self.package)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        template = _JINJA_ENV.from_string(JAVA_PAGE_OBJECT_TEMPLATE)
+        template = _JINJA_ENV.from_string(PLAYWRIGHT_PAGE_TEMPLATE)
         return post_process_java_code(template.render(baw=baw_def, package=self.package), self.package)
 
     def generate_test_script(self, script_def: ScriptDef) -> str:
-        if self.test_framework == "junit5":
-            template = _JINJA_ENV.from_string(JAVA_JUNIT5_TEMPLATE)
-        else:
-            template = _JINJA_ENV.from_string(JAVA_TESTNG_TEMPLATE)
+        template = _JINJA_ENV.from_string(PLAYWRIGHT_TESTNG_TEMPLATE)
         return post_process_java_code(template.render(s=script_def, package=self.package,
-                               framework=self.test_framework), self.package)
+                                                  framework=self.test_framework), self.package)
 
     def generate_test_data(self, data_def: TestDataDef) -> str:
         _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(JAVA_TEST_DATA_TEMPLATE)
+        template = _JINJA_ENV.from_string(PLAYWRIGHT_TEST_DATA_TEMPLATE)
         return post_process_java_code(template.render(d=data_def, package=self.package), self.package)
 
     def get_import_style(self) -> ImportStyle:
-        is_junit5 = self.test_framework == "junit5"
         test_imports = [
-            "import org.junit.jupiter.api.Test;",
-            "import org.junit.jupiter.api.BeforeEach;",
-            "import org.junit.jupiter.api.AfterEach;",
-        ] if is_junit5 else [
             "import org.testng.annotations.Test;",
             "import org.testng.annotations.BeforeMethod;",
         ]
-        assert_import = "import static org.junit.jupiter.api.Assertions.*;" if is_junit5 else "import org.testng.Assert;"
+        assert_import = "import org.testng.Assert;"
 
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "import_style" in item.key:
-                    examples = item.value.get("examples", [])
-                    return ImportStyle(
-                        from_imports=examples + [
-                            f"import {self.package}.pages.HomePage;",
-                            f"import {self.package}.components.WebInput;",
-                            f"import {self.package}.components.WebButton;",
-                        ],
-                        direct_imports=[
-                            *test_imports,
-                            "import org.openqa.selenium.WebDriver;",
-                            "import org.openqa.selenium.chrome.ChromeDriver;",
-                            assert_import,
-                        ],
-                    )
         return ImportStyle(
             from_imports=[
-                f"import {self.package}.pages.HomePage;",
-                f"import {self.package}.components.WebInput;",
-                f"import {self.package}.components.WebButton;",
+                f"import {self.package}.pages.*;",
+                f"import {self.package}.components.*;",
+                f"import {self.package}.business.*;",
             ],
             direct_imports=[
+                f"import {self.package}.tests.BaseTest;",
+                "import com.microsoft.playwright.Page;",
+                "import com.microsoft.playwright.Locator;",
                 *test_imports,
-                "import org.openqa.selenium.WebDriver;",
-                "import org.openqa.selenium.chrome.ChromeDriver;",
                 assert_import,
             ],
         )
 
     def get_assertion_style(self) -> AssertionStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "assertion_style" in item.key:
-                    return AssertionStyle(type=item.value.get("type", "testng_assert"))
         return AssertionStyle(type="testng_assert")
 
     def render_step(self, step) -> str:
-        """Java TestNG 风格步骤渲染"""
+        """Playwright Java 风格步骤渲染"""
         kind = getattr(step, 'kind', None)
         decl = getattr(step, 'decl', None)
 
         if kind and kind.value == "decl" and decl:
-            return f"{decl.type} {decl.var} = new {decl.type}(driver);"
+            return f"{decl.type} {decl.var} = new {decl.type}(page);"
 
         if kind and kind.value == "navigate" and step.calls:
             url = step.calls[0].args[0] if step.calls[0].args else ""
-            return f'driver.get("{url}");'
+            return f'page.navigate("{url}");'
 
         if kind and kind.value == "action" and step.calls:
             call = step.calls[0]
@@ -489,7 +466,7 @@ class JavaCodeGenerator(CodeGenerator):
         if kind and kind.value == "assert" and step.calls:
             msg = step.calls[0].args[0] if step.calls[0].args else step.comment
             if msg:
-                return f"// assert: {msg}";
+                return f"// assert: {msg}"
             return "Assert.assertNotNull(page);"
 
         comment = getattr(step, 'comment', '')
@@ -499,11 +476,11 @@ class JavaCodeGenerator(CodeGenerator):
 
 
 # ═══════════════════════════════════════════════════════════════
-# JavaDataFormatter
+# PlaywrightDataFormatter
 # ═══════════════════════════════════════════════════════════════
 
-class JavaDataFormatter(DataFormatter):
-    """录制值 → Java 测试数据常量类"""
+class PlaywrightDataFormatter(DataFormatter):
+    """录制值 → Java TestNG DataProvider 测试数据类"""
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
@@ -511,13 +488,9 @@ class JavaDataFormatter(DataFormatter):
             self.package = package_name
         else:
             pkg = self._resolve_package()
-            if pkg is None:
-                self.package = "com.acme"
-            else:
-                self.package = pkg
+            self.package = pkg if pkg is not None else "com.baidu.test"
 
     def _resolve_package(self) -> Optional[str]:
-        """从 KB 或源码扫描检测项目包名。"""
         packages: set[str] = set()
         if self.kb:
             for item in self.kb.store.list_category("conventions"):
@@ -525,13 +498,6 @@ class JavaDataFormatter(DataFormatter):
                     pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
                     if pkg:
                         packages.add(pkg)
-            if not packages:
-                for item in self.kb.store.list_category("components"):
-                    key = item.key
-                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
-                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
-                        if len(pkg_parts) > 1:
-                            packages.add(pkg_parts[0])
             if packages:
                 parts_list = [p.split(".") for p in packages]
                 common = parts_list[0]
@@ -542,12 +508,10 @@ class JavaDataFormatter(DataFormatter):
                     common = common[:i]
                 if common:
                     return ".".join(common)
-
         if self.kb and hasattr(self.kb, 'project_root'):
             result = scan_java_source_for_package(str(self.kb.project_root))
             if result is not None:
                 return result
-
         return None
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
@@ -575,68 +539,65 @@ class JavaDataFormatter(DataFormatter):
 
 
 # ═══════════════════════════════════════════════════════════════
-# Jinja2 模板 — Java 代码输出
+# Jinja2 模板 — Playwright Java 代码输出
 # ═══════════════════════════════════════════════════════════════
 
-JAVA_COMPONENT_TEMPLATE = """// [AUTO-GEN] Component: {{ comp.class_name }}
+PLAYWRIGHT_COMPONENT_TEMPLATE = """// [AUTO-GEN] Component: {{ comp.class_name }}
 package {{ package }}.components;
 
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
-import org.openqa.selenium.By;
+import com.microsoft.playwright.Locator;
+import com.microsoft.playwright.Page;
+
+import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
 
 /**
- * {{ comp.class_name }} — auto-generated component wrapper.
+ * {{ comp.class_name }} — auto-generated Playwright component wrapper.
  */
-public class {{ comp.class_name }} {
-    private final WebDriver driver;
-    private final String rootXpath;
+public class {{ comp.class_name }} extends {{ comp.base_class }} {
 
-    public {{ comp.class_name }}(WebDriver driver, String xpath) {
-        this.driver = driver;
-        this.rootXpath = xpath;
+    public {{ comp.class_name }}(Page page, String description) {
+        super(page.locator("{{ comp.xpath }}"), description);
     }
 
 {% for method in comp.methods %}
 {% if method.action_type == 'wait' %}
-    public void {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
-        driver.findElement(By.xpath(rootXpath)).isDisplayed();
+    public {{ comp.class_name }} {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+        locator.waitFor();
+        return this;
     }
 {% elif method.action_type == 'click' %}
-    public void {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
-        driver.findElement(By.xpath(rootXpath)).click();
+    public {{ comp.class_name }} {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+        locator.click();
+        return this;
     }
 {% elif method.action_type == 'input' %}
-    public void {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
-        driver.findElement(By.xpath(rootXpath)).sendKeys({{ method.params[0].name }});
+    public {{ comp.class_name }} {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+        locator.fill({{ method.params[0].name }});
+        return this;
+    }
+{% elif method.action_type == 'select' %}
+    public {{ comp.class_name }} {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+        locator.selectOption({{ method.params[0].name }});
+        return this;
     }
 {% elif method.action_type == 'read' %}
     public {{ method.returns }} {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
-        return driver.findElement(By.xpath(rootXpath)).getText();
+        return locator.textContent();
     }
 {% elif method.action_type == 'assertion' %}
-    public void {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
-        String actual = driver.findElement(By.xpath(rootXpath)).getText();
-        Assert.assertEquals(actual, {{ method.params[0].name }});
+    public {{ comp.class_name }} {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+        assertThat(locator).isVisible();
+        return this;
     }
 {% endif %}
-{% endfor %}
-
-{% for method in comp.methods if method.action_type == 'select' %}
-    public void {{ method.name }}({% for p in method.params %}{{ p.type }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}) {
-        new org.openqa.selenium.support.ui.Select(driver.findElement(By.xpath(rootXpath)))
-            .selectByVisibleText({{ method.params[0].name }});
-    }
 {% endfor %}
 }
 """
 
-JAVA_PAGE_OBJECT_TEMPLATE = """// [AUTO-GEN] Page: {{ baw.class_name }}
+PLAYWRIGHT_PAGE_TEMPLATE = """// [AUTO-GEN] Page: {{ baw.class_name }}
 package {{ package }}.pages;
 
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
-import org.openqa.selenium.By;
+import com.microsoft.playwright.Page;
 {% for op in baw.operations %}
 {% for call in op.calls %}
 import {{ package }}.components.{{ call.component }};
@@ -646,18 +607,19 @@ import {{ package }}.components.{{ call.component }};
 /**
  * {{ baw.class_name }} — auto-generated page object.
  */
-public class {{ baw.class_name }} extends BasePage {
+public class {{ baw.class_name }} extends BasePage<{{ baw.class_name }}> {
+
 {% for op in baw.operations %}
 {% for call in op.calls %}
-    private {{ call.component }} {{ call.component[:1].lower() }}{{ call.component[1:] }};
+    public final {{ call.component }} {{ call.component[:1].lower() }}{{ call.component[1:] }};
 {% endfor %}
 {% endfor %}
 
-    public {{ baw.class_name }}(WebDriver driver) {
-        super(driver);
+    public {{ baw.class_name }}(Page page) {
+        super(page, "{{ baw.module }}");
 {% for op in baw.operations %}
 {% for call in op.calls %}
-        this.{{ call.component[:1].lower() }}{{ call.component[1:] }} = new {{ call.component }}(driver, "//*[@data-module='{{ call.component.lower()|replace("web", "") }}']");
+        this.{{ call.component[:1].lower() }}{{ call.component[1:] }} = new {{ call.component }}(page, "{{ call.component }}");
 {% endfor %}
 {% endfor %}
     }
@@ -669,25 +631,31 @@ public class {{ baw.class_name }} extends BasePage {
 {% endfor %}
     }
 {% endfor %}
+
+    @Override
+    public {{ baw.class_name }} assertPageLoaded() {
+{% for op in baw.operations %}
+{% for call in op.calls %}
+        {{ call.component[:1].lower() }}{{ call.component[1:] }}.assertVisible();
+{% endfor %}
+{% endfor %}
+        return this;
+    }
 }
 """
 
-JAVA_TESTNG_TEMPLATE = """// [AUTO-GEN] {{ s.description or s.test_name }}
+PLAYWRIGHT_TESTNG_TEMPLATE = """// [AUTO-GEN] {{ s.description or s.test_name }}
 package {{ package }}.tests;
 
 {% for imp in s.imports %}
 {{ imp }}
 {% endfor %}
+import {{ package }}.pages.*;
+import {{ package }}.data.*;
 
-public class {{ s.class_name }} {
-    private WebDriver driver;
+public class {{ s.class_name }} extends BaseTest {
 
-    @BeforeMethod
-    public void setUp() {
-        driver = new ChromeDriver();
-    }
-
-    @Test
+    @Test{% if s.data_refs %}(dataProvider = "{{ s.test_name }}Data", dataProviderClass = {{ s.class_name }}Data.class){% endif %}
     public void {{ s.test_name }}() {
 {% for step in s.steps %}
         {{ step }}
@@ -696,43 +664,23 @@ public class {{ s.class_name }} {
 }
 """
 
-JAVA_JUNIT5_TEMPLATE = """// [AUTO-GEN] {{ s.description or s.test_name }} — JUnit 5
-package {{ package }}.tests;
-
-{% for imp in s.imports %}
-{{ imp }}
-{% endfor %}
-
-class {{ s.class_name }} {
-    private WebDriver driver;
-
-    @BeforeEach
-    void setUp() {
-        driver = new ChromeDriver();
-    }
-
-    @Test
-    void {{ s.test_name }}() {
-{% for step in s.steps %}
-        {{ step }}
-{% endfor %}
-    }
-
-    @AfterEach
-    void tearDown() {
-        if (driver != null) {
-            driver.quit();
-        }
-    }
-}
-"""
-
-JAVA_TEST_DATA_TEMPLATE = """// [AUTO-GEN] Test Data: {{ d.variable_name }}
+PLAYWRIGHT_TEST_DATA_TEMPLATE = """// [AUTO-GEN] Test Data: {{ d.variable_name }}
 package {{ package }}.data;
+
+import org.testng.annotations.DataProvider;
 
 public class {{ d.variable_name }} {
 {% for field, info in d.fields.items() %}
     public static final {{ info.type }} {{ field.upper() }} = {{ info.value | repr }};
 {% endfor %}
+
+    @DataProvider(name = "{{ d.variable_name[:1].lower() }}{{ d.variable_name[1:] }}")
+    public static Object[][] {{ d.variable_name[:1].lower() }}{{ d.variable_name[1:] }}() {
+        return new Object[][]{
+{% for field, info in d.fields.items() %}
+                { {{ info.value | repr }} },
+{% endfor %}
+        };
+    }
 }
 """

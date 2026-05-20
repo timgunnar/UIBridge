@@ -5,9 +5,12 @@
 """
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from playwright.sync_api import Page
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -118,8 +121,8 @@ class RuntimeAnalyzer:
             }""")
             if metrics:
                 self._report.performance_metrics = metrics
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to collect performance metrics: %s", e)
 
         return self._report
 

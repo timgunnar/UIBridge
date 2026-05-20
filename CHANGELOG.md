@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## v0.3.1
+
+### 代码质量
+
+**P0 Bug 修复（5 项）**：
+- `FluentDataFormatter._infer_java_type` 生成 Python 类型名（`bool`/`str`）改为 Java 类型（`boolean`/`String`），提取为 `base.py` 共享函数
+- `ReferenceCodeGenerator.render_step` 断言从 Python 注释改为可执行 `assert True, f"TODO: ..."`
+- `component_aw_gen.py` 使用 `sanitize_identifier()` 替代手动字符串替换，防止中文/特殊字符泄露到代码
+- 3 处 `except Exception: pass` 添加 `logger.warning()`（`cli.py`、`runtime_analyzer.py`、`aria_analyzer.py`）
+- `_extract_domain` 正则补齐 `edit|detail` 路径段（`screenplay.py`、`java_fluent.py`）
+
+**P0 功能补全（1 项）**：
+- `FluentActionRecognizer.aggregate()` 实现缓冲聚合逻辑，连续 input+click 合并为 `fillAndSubmit`，与其他 4 个适配器一致
+
+**P1 代码去重（7 项）**：
+- `load_adapter` 提取为 `adapter/loader.py` 共享工厂函数
+- `_java_class_name` 5 份副本 → `to_java_class_name()` 共享函数
+- `_post_process` 3 份副本 → `post_process_java_code()` 共享函数
+- `_get_aria_map` 4 份副本 → `ComponentResolver._resolve_aria_map()` 基类方法
+- `get_locator_priority` 4 份副本 → `LocatorStrategy._resolve_locator_priority()` 基类方法
+- `recognize_pattern` 5 份副本 → `ActionRecognizer.recognize_pattern()` 基类实现
+- `render_step` 参数格式化 3 份副本 → `format_action_params()` 共享函数
+
+**P2 性能优化（5 项）**：
+- Jinja2 Environment 单例化（5 个适配器文件，消除 ~20 处重复创建）
+- 正则编译为模块级对象（7 个文件）
+- ActionType 类型规范化前置到 `RawStep.__post_init__`（消除 5 处重复）
+- `suggest_name` Java 适配器统一 PascalCase
+- `build_xpath` ancestor_chain 补齐（`screenplay.py`、`java_fluent.py`、`custom_playwright_java.py`）
+
+### 测试
+
+- 186 个测试全部通过（v0.3.0: 159 个）
+- 新增 26 个测试（KB 搜索语义匹配 8 个 + Screenplay ARIA 扩展 9 个 + JavaFluent ARIA 扩展 9 个）
+- 新增 1 个测试（安装/卸载正确性）
+
+### 文档
+
+- 新增 `docs/mcp-tools.md` — 9 个 MCP 工具完整参考
+
+---
+
 ## v0.3.0
 
 ### 关键升级
@@ -48,7 +90,8 @@ MCP Server 工具总数：8 → 9（原有 `analyze_page` / `start_recording` / 
 
 ### 测试
 
-- 135 个测试全部通过（v0.2.0: 131 个）
+- 159 个测试全部通过（v0.2.0: 131 个）
+- 新增 24 个安装/卸载正确性测试（cleanup 扫描、CLI 行为、安装元数据验证）
 - 新增 4 个回归测试：回调保留、变更事件、事件计数、空闲页面捕获
 
 ---

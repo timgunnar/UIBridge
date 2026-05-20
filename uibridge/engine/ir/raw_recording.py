@@ -95,6 +95,10 @@ class RawStep:
     navigation_triggered: bool = False
     tab_index: int = 0
 
+    def __post_init__(self):
+        if not isinstance(self.action, ActionType):
+            object.__setattr__(self, 'action', ActionType(self.action))
+
 
 @dataclass
 class RawRecordingMeta:

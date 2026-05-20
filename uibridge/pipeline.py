@@ -1,6 +1,9 @@
 """核心管道 — 串联录制 → 分析 → 匹配 → 生成 全流程"""
 
+import re
 from pathlib import Path
+
+_ACME_PKG_RE = re.compile(r'\bcom\.acme\b')
 
 from .engine.ir.raw_recording import RawRecording, RawStep, ActionType, Target, SelectorSet
 from .engine.ir.semantic_action import SemanticActionSequence, SemanticScenario, SemanticAction
@@ -14,6 +17,7 @@ from .engine.self_test import SelfTestRunner, SelfTestResult
 from .adapter.base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter, ElementInfo, ScriptDef,
+    sanitize_identifier,
 )
 from .generator.style_learner import StyleLearner, StyleProfile
 from .generator.component_aw_gen import ComponentAWGenerator
@@ -73,7 +77,7 @@ class Pipeline:
         last_ts = 0
 
         for step in recording.steps:
-            action = step.action if isinstance(step.action, ActionType) else ActionType(step.action)
+            action = step.action
             ts = step.timestamp_ms or 0
 
             # NAVIGATE / TAB_SWITCH 总是场景边界
@@ -130,8 +134,7 @@ class Pipeline:
 
         actionable_steps = [
             s for s in steps
-            if (s.action if isinstance(s.action, ActionType) else ActionType(s.action))
-            not in (ActionType.NAVIGATE, ActionType.TAB_SWITCH)
+            if s.action not in (ActionType.NAVIGATE, ActionType.TAB_SWITCH)
         ]
         name = self._derive_scenario_name(actionable_steps, page)
 
@@ -145,13 +148,15 @@ class Pipeline:
         if not steps:
             return f"navigate_{page}"
         first = steps[0]
-        action = first.action if isinstance(first.action, ActionType) else ActionType(first.action)
+        action = first.action
         val = (first.value or "")[:20]
         if action == ActionType.INPUT:
             return f"input_{val}" if val else f"input_on_{page}"
         if action == ActionType.CLICK:
             label = first.target.label if first.target else ""
-            return f"click_{label}" if label else f"click_on_{page}"
+            tag = first.target.tag if first.target else ""
+            safe_label = sanitize_identifier(label, fallback_tag=tag or "elem") if label else ""
+            return f"click_{safe_label}" if safe_label else f"click_on_{page}"
         return f"action_on_{page}"
 
     def _infer_page_name(self, url: str) -> str:
@@ -251,7 +256,10 @@ class Pipeline:
 
         # 收集 imports
         import_style = self.code_generator.get_import_style()
-        imports = set(import_style.direct_imports)
+        imports = set()
+        for imp in import_style.direct_imports:
+            # direct_imports may be bare module names or "import X" statements
+            imports.add(f"import {imp}" if not imp.startswith("import ") else imp)
         for imp in import_style.from_imports:
             imports.add(imp)
 
@@ -264,7 +272,7 @@ class Pipeline:
             name=f"test_{safe_name}",
             description=f"场景: {' → '.join(scenario.page_flow)}",
             imports=sorted(imports),
-            fixtures=["page"],
+            fixtures=[],
             steps=steps,
         )
 
@@ -397,24 +405,10 @@ class Pipeline:
     def _apply_style(self, steps: list[str], profile: StyleProfile) -> list[str]:
         """将 StyleLearner 学到的风格应用到步骤代码中。
 
-        覆盖：引号风格、注释风格、断言风格、命名惯例。
+        注：引号风格、注释语法、断言风格等语言/框架特定特征，
+        由适配器的 render_step() 在代码构造时直接生成正确语法。
+        此处仅处理跨语言的代码行级别操作。
         """
-        # 引号风格
-        if profile.quote_style == "single":
-            steps = [s.replace('"', "'") for s in steps]
-
-        # 注释风格：Java 用 //，Python 用 #
-        if profile.language == "java":
-            steps = [s.replace("# ", "// ") for s in steps]
-
-        # 断言风格
-        if profile.assert_style in ("testng_assert", "assertj"):
-            assertion_style = self.code_generator.get_assertion_style()
-            if assertion_style.type == "testng_assert":
-                steps = [s.replace("assert ", "Assert.") for s in steps]
-            elif assertion_style.type == "assertj":
-                steps = [s.replace("assert ", "assertThat(") for s in steps]
-
         # 注释密度控制：低密度项目中去掉多余注释
         if profile.comment_density < 0.05:
             steps = [s for s in steps if not s.strip().startswith("#") and not s.strip().startswith("//")]
@@ -423,13 +417,9 @@ class Pipeline:
 
     @staticmethod
     def _sanitize_test_name(name: str) -> str:
-        """清除测试名中的非法字符（@, ., 空格等）"""
-        import re
-        # 保留字母、数字、下划线、连字符、汉字
-        safe = re.sub(r'[^a-zA-Z0-9_\-一-鿿]', '_', name)
-        # 合并且修剪首尾下划线
-        safe = re.sub(r'_+', '_', safe).strip('_')
-        return safe or "unnamed"
+        """清除测试名中的非法字符（中文、标点、CSS 选择器等）"""
+        from .adapter.base import sanitize_identifier
+        return sanitize_identifier(name, fallback_tag="test")
 
     def _resolve_package_from_kb(self) -> str:
         """从 KB 或源码扫描提取基础包名（所有包的公共前缀）。
@@ -494,12 +484,11 @@ class Pipeline:
 
     def _apply_kb_package_to_code(self, code: str) -> str:
         """用 KB 解析的包名替换生成代码中的硬编码 package/import 声明。"""
-        import re
         pkg = self._resolved_package
         if not pkg or pkg == "com.acme":
             return code
         # 替换: package com.acme.tests; → package com.enterprise.tests;
-        code = re.sub(r'\bcom\.acme\b', pkg, code)
+        code = _ACME_PKG_RE.sub(pkg, code)
         return code
 
     def _apply_kb_conventions(self, steps: list[str]) -> list[str]:
@@ -540,13 +529,10 @@ class Pipeline:
         return steps
 
     def _detect_language(self) -> str:
-        """检测目标语言。优先从 StyleProfile，其次从适配器类名推断。"""
+        """检测目标语言。优先从 StyleProfile，其次从适配器 target_language 属性。"""
         if self._style_profile:
             return self._style_profile.language
-        adapter_name = type(self.code_generator).__name__
-        if "Java" in adapter_name or "Fluent" in adapter_name:
-            return "java"
-        return "python"
+        return getattr(self.code_generator, "target_language", "python")
 
     # ── 风格学习 ──────────────────────────────
 
@@ -593,16 +579,17 @@ class Pipeline:
     def _extract_captured_values(self, recording: RawRecording) -> dict:
         values = {}
         for step in recording.steps:
-            action = step.action if isinstance(step.action, ActionType) else ActionType(step.action)
+            action = step.action
             if action == ActionType.INPUT and step.value:
                 label = step.target.label if step.target else "unknown"
-                key = label.replace(" ", "_").lower() if label else "field"
+                tag = step.target.tag if step.target else ""
+                key = sanitize_identifier(label, fallback_tag=tag or "field") if label else "field"
                 values[key] = step.value
         return values
 
     def _extract_domain(self, recording: RawRecording) -> str:
         for step in recording.steps:
-            action = step.action if isinstance(step.action, ActionType) else ActionType(step.action)
+            action = step.action
             if action == ActionType.NAVIGATE and step.target and step.target.url:
                 from urllib.parse import urlparse
                 path = urlparse(step.target.url).path.strip("/")

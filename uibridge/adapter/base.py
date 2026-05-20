@@ -121,6 +121,70 @@ class FixtureStyle:
     template: str = ""
 
 
+def _to_java_type(value) -> str:
+    """Map Python type to Java primitive/boxed type name.
+
+    Used by Java adapters to declare correct field types in generated code.
+    """
+    mapping = {bool: "boolean", int: "int", float: "double", str: "String", type(None): "String"}
+    return mapping.get(type(value), "String")
+
+
+def to_java_class_name(name: str) -> str:
+    """将 snake_case / kebab-case 转为 PascalCase（Java 类名）"""
+    parts = re.split(r'[-_\s]', name)
+    return "".join(p.capitalize() for p in parts if p)
+
+
+def post_process_java_code(code: str, package: str) -> str:
+    """后处理 Java 生成代码：默认包时移除 package 行和以 . 开头的 import。
+
+    若 package 非空（有包名），直接返回；否则清理默认包残留。
+    """
+    if package:
+        return code
+    code = re.sub(r'^\s*package\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
+    code = re.sub(r'^\s*import\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
+    code = re.sub(r'\n{3,}', '\n\n', code)
+    return code.strip() + '\n'
+
+
+def format_action_params(call) -> str:
+    """将 call.args / call.kwargs 格示为 Java 方法调用的参数串。
+
+    args 中的字符串用双引号包裹，kwargs 的值同理。
+    返回如 '"user", "pass"' 这样的参数字符串。
+    """
+    parts = []
+    for a in call.args:
+        parts.append(f'"{a}"' if isinstance(a, str) else str(a))
+    for v in call.kwargs.values():
+        parts.append(f'"{v}"' if isinstance(v, str) else str(v))
+    return ", ".join(parts)
+
+
+def sanitize_identifier(name: str, fallback_tag: str = "elem", fallback_index: int = 0) -> str:
+    """Convert raw label/text to a valid Python/Java identifier.
+
+    Strips non-ASCII characters, punctuation, and CSS selector fragments.
+    Falls back to tag+index when the sanitized result is empty.
+    """
+    if not name:
+        return f"{fallback_tag}_{fallback_index}" if fallback_tag else f"elem_{fallback_index}"
+    # Replace spaces and hyphens with underscores
+    safe = name.replace(" ", "_").replace("-", "_")
+    # Remove any character that is not ASCII alphanumeric or underscore
+    safe = re.sub(r'[^a-zA-Z0-9_]', '', safe)
+    # Collapse multiple underscores
+    safe = re.sub(r'_+', '_', safe).strip('_')
+    # Ensure it doesn't start with a digit
+    if safe and safe[0].isdigit():
+        safe = '_' + safe
+    if not safe:
+        safe = f"{fallback_tag}_{fallback_index}" if fallback_tag else f"elem_{fallback_index}"
+    return safe.lower() if safe else "unnamed"
+
+
 @dataclass
 class AssertionStyle:
     type: str = "pytest_assert"  # pytest_assert / self_assert / expect
@@ -169,6 +233,16 @@ class ComponentResolver(ABC):
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:
         ...
 
+    def _resolve_aria_map(self) -> dict:
+        """查询 KB 获取 ARIA role 映射，回退到子类的 ARIA_MAP 常量。"""
+        kb = getattr(self, 'kb', None)
+        aria_map = getattr(self, 'ARIA_MAP', {})
+        if kb:
+            for item in kb.store.list_category("conventions"):
+                if "component_types" in item.key:
+                    return item.value.get("aria_role_map", aria_map)
+        return aria_map
+
 
 class LocatorStrategy(ABC):
     """接口 2: 定位策略 — 元素 → 框架约定的 XPath/选择器"""
@@ -185,6 +259,15 @@ class LocatorStrategy(ABC):
     def get_locator_priority(self) -> list[str]:
         ...
 
+    def _resolve_locator_priority(self) -> list[str]:
+        """查询 KB 获取定位器优先级，回退到子类的 PRIORITY 常量。"""
+        kb = getattr(self, 'kb', None)
+        if kb:
+            kb_conventions = kb.get_locator_conventions()
+            if kb_conventions and "priority" in kb_conventions:
+                return kb_conventions["priority"]
+        return getattr(self, 'PRIORITY', ["id", "name", "css", "xpath"])
+
 
 class ActionRecognizer(ABC):
     """接口 3: 动作识别器 — DOM 操作序列 → 业务语义"""
@@ -193,13 +276,47 @@ class ActionRecognizer(ABC):
     def aggregate(self, raw_steps: list, page_context: dict) -> list:
         ...
 
-    @abstractmethod
     def recognize_pattern(self, sequences: list) -> list[dict]:
-        ...
+        """PrefixSpan 频繁子序列挖掘 — 发现可封装的 BAW 模式。
+
+        所有适配器共用此实现。子类可覆盖以定制输出格式。
+        """
+        if len(sequences) < 3:
+            return []
+
+        # 将序列转为 action 名称列表
+        action_seqs = []
+        for seq in sequences:
+            actions = []
+            if isinstance(seq, list):
+                for item in seq:
+                    if isinstance(item, dict):
+                        actions.append(item.get("action", "?"))
+                    else:
+                        actions.append(str(item))
+            action_seqs.append(actions)
+
+        miner = _PrefixSpan(min_support=3, max_length=8)
+        frequent_patterns = miner.mine(action_seqs)
+
+        patterns = []
+        for pattern, count in frequent_patterns:
+            pattern_key = " → ".join(pattern)
+            patterns.append({
+                "pattern": pattern_key,
+                "actions": list(pattern),
+                "frequency": count,
+                "suggestion": f"Suggest wrapping into BusinessAW (appeared {count} times)",
+            })
+
+        return patterns
 
 
 class CodeGenerator(ABC):
     """接口 4: 代码生成器 — 框架级 IR → 代码文件"""
+
+    target_language: str = "python"  # 子类覆盖为 "java" 等
+    default_base_class: str = "BaseAW"  # 子类覆盖为 "Target" / "BaseComponentAW" 等
 
     @abstractmethod
     def generate_component_aw(self, comp_def: ComponentDef) -> str:

@@ -1,6 +1,6 @@
 """组件 AW 生成器"""
 
-from ..adapter.base import ComponentDef, MethodTemplate, CodeGenerator, ComponentResolver
+from ..adapter.base import ComponentDef, MethodTemplate, CodeGenerator, ComponentResolver, sanitize_identifier
 
 
 class ComponentAWGenerator:
@@ -12,7 +12,8 @@ class ComponentAWGenerator:
 
     def generate(self, component_type: str, aria_role: str, xpath: str,
                  resolver=None, discovered_inputs: list[dict] = None,
-                 discovered_buttons: list[dict] = None) -> str:
+                 discovered_buttons: list[dict] = None,
+                 base_class: str = "BaseAW") -> str:
         r = resolver or self.resolver
         if r is None:
             raise ValueError("resolver is required")
@@ -21,7 +22,7 @@ class ComponentAWGenerator:
         if discovered_inputs:
             for inp in discovered_inputs:
                 name = inp.get("name", "") or inp.get("placeholder", "") or "field"
-                clean_name = name.replace(" ", "_").lower()
+                clean_name = sanitize_identifier(name)
                 if not any(m.name == f"enter_{clean_name}" for m in methods):
                     methods.append(MethodTemplate(
                         name=f"enter_{clean_name}",
@@ -32,7 +33,7 @@ class ComponentAWGenerator:
         if discovered_buttons:
             for btn in discovered_buttons:
                 text = btn.get("text", "") or btn.get("aria_label", "")
-                clean_name = text.replace(" ", "_").lower()[:30]
+                clean_name = sanitize_identifier(text)[:30]
                 if clean_name and not any(m.name == f"click_{clean_name}" for m in methods):
                     methods.append(MethodTemplate(
                         name=f"click_{clean_name}" if clean_name else "click",
@@ -45,11 +46,12 @@ class ComponentAWGenerator:
             module=f"aaw.{component_type.lower()}",
             xpath=xpath,
             methods=methods,
-            base_class="BaseAW",
+            base_class=base_class,
         )
         return self.code_gen.generate_component_aw(comp_def)
 
-    def generate_all(self, components: list[dict], resolver=None) -> list[dict]:
+    def generate_all(self, components: list[dict], resolver=None,
+                     base_class: str = "BaseAW") -> list[dict]:
         """批量生成组件 AW"""
         results = []
         for comp in components:
@@ -60,6 +62,7 @@ class ComponentAWGenerator:
                 resolver=resolver,
                 discovered_inputs=comp.get("inputs", []),
                 discovered_buttons=comp.get("interactables", []),
+                base_class=base_class,
             )
             results.append({
                 "type": comp.get("type", ""),

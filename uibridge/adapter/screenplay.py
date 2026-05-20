@@ -2,6 +2,8 @@
 
 import re
 
+from jinja2 import Environment, BaseLoader
+
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
@@ -9,29 +11,90 @@ from .base import (
     BAWDef, BAWOperationDef, CallDef,
     ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
+    sanitize_identifier,
 )
+
+_JINJA_ENV = Environment(loader=BaseLoader())
+_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 class ScreenplayComponentResolver(ComponentResolver):
     """Screenplay 模式: 组件 → Target(页面元素定位)，优先从 KB 查询"""
 
+    ARIA_MAP = {
+        "table": "TableTarget", "grid": "TableTarget", "treegrid": "TableTarget",
+        "form": "FormTarget",
+        "textbox": "InputTarget", "searchbox": "InputTarget", "spinbutton": "SpinnerTarget",
+        "checkbox": "CheckboxTarget", "radio": "RadioTarget", "switch": "ToggleTarget",
+        "combobox": "DropdownTarget", "listbox": "DropdownTarget",
+        "slider": "SliderTarget", "option": "OptionTarget",
+        "menu": "MenuTarget", "menubar": "MenuTarget",
+        "tablist": "TabTarget", "tab": "TabTarget",
+        "tree": "TreeTarget", "treeitem": "TreeItemTarget",
+        "navigation": "NavTarget", "link": "LinkTarget", "button": "ButtonTarget",
+        "dialog": "DialogTarget", "alert": "AlertTarget", "alertdialog": "DialogTarget",
+        "banner": "BannerTarget", "tooltip": "TooltipTarget",
+        "progressbar": "ProgressTarget", "status": "StatusTarget",
+        "log": "LogTarget", "timer": "TimerTarget",
+        "region": "RegionTarget", "group": "GroupTarget",
+        "list": "ListTarget", "listitem": "ListItemTarget",
+        "separator": "SeparatorTarget",
+        "img": "ImageTarget", "heading": "HeadingTarget",
+        "main": "MainTarget", "contentinfo": "FooterTarget",
+    }
+
+    METHOD_TEMPLATES = {
+        "TableTarget": [
+            MethodTemplate("locate", [], "read", "TableTarget"),
+            MethodTemplate("row_count", [], "read", "int"),
+            MethodTemplate("cell_text", [{"name": "row", "type": "int"}, {"name": "col", "type": "int"}], "read", "str"),
+            MethodTemplate("filter_by", [{"name": "column", "type": "str"}, {"name": "value", "type": "str"}], "input"),
+        ],
+        "FormTarget": [
+            MethodTemplate("locate", [], "read", "FormTarget"),
+            MethodTemplate("submit", [], "click"),
+            MethodTemplate("reset", [], "click"),
+        ],
+        "InputTarget": [
+            MethodTemplate("locate", [], "read", "InputTarget"),
+            MethodTemplate("enter", [{"name": "text", "type": "str"}], "input"),
+            MethodTemplate("clear", [], "input"),
+            MethodTemplate("value", [], "read", "str"),
+        ],
+        "ButtonTarget": [
+            MethodTemplate("locate", [], "read", "ButtonTarget"),
+            MethodTemplate("click", [], "click"),
+        ],
+        "DropdownTarget": [
+            MethodTemplate("locate", [], "read", "DropdownTarget"),
+            MethodTemplate("select_by_value", [{"name": "value", "type": "str"}], "select"),
+            MethodTemplate("select_by_index", [{"name": "index", "type": "int"}], "select"),
+            MethodTemplate("selected_value", [], "read", "str"),
+        ],
+        "CheckboxTarget": [
+            MethodTemplate("locate", [], "read", "CheckboxTarget"),
+            MethodTemplate("check", [], "click"),
+            MethodTemplate("uncheck", [], "click"),
+            MethodTemplate("is_checked", [], "read", "bool"),
+        ],
+        "LinkTarget": [
+            MethodTemplate("locate", [], "read", "LinkTarget"),
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("href", [], "read", "str"),
+        ],
+        "DialogTarget": [
+            MethodTemplate("locate", [], "read", "DialogTarget"),
+            MethodTemplate("accept", [], "click"),
+            MethodTemplate("dismiss", [], "click"),
+        ],
+    }
+
     def __init__(self, kb_manager=None):
         self.kb = kb_manager
 
-    def _get_role_map(self) -> dict:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "component_types" in item.key:
-                    return item.value.get("aria_role_map", {})
-        return {}
-
     def resolve_type(self, aria_role: str, dom_attrs: dict, snapshot_context: str) -> str:
-        role_lower = aria_role.lower()
-        role_map = {
-            "textbox": "Target", "searchbox": "Target", "button": "Target",
-            "table": "Target", "combobox": "Target", "listbox": "Target",
-        }
-        return role_map.get(role_lower, "Target")
+        role_map = self._resolve_aria_map()
+        return role_map.get(aria_role.lower(), "Target")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
         domain = self._extract_domain(url)
@@ -41,10 +104,12 @@ class ScreenplayComponentResolver(ComponentResolver):
         return f"{domain}_{aria_role}".upper() if aria_role else "PAGE_ELEMENT"
 
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:
-        return [MethodTemplate("locate", [], "read", "Target")]
+        return self.METHOD_TEMPLATES.get(component_type, [
+            MethodTemplate("locate", [], "read", "Target"),
+        ])
 
     def _extract_domain(self, url: str) -> str:
-        match = re.search(r'/(\w+)/(manage|list|create)', url)
+        match = _DOMAIN_RE.search(url)
         return match.group(1) if match else "unknown"
 
 
@@ -57,19 +122,31 @@ class ScreenplayLocatorStrategy(LocatorStrategy):
         self.kb = kb_manager
 
     def get_locator_priority(self) -> list[str]:
-        if self.kb:
-            kb_conventions = self.kb.get_locator_conventions()
-            if kb_conventions and "priority" in kb_conventions:
-                return kb_conventions["priority"]
-        return self.PRIORITY
+        return self._resolve_locator_priority()
 
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
+        # 1. 向上查找最近的 data-module 祖先
+        for ancestor in element_info.ancestor_chain:
+            anc_attrs = ancestor.get("attrs", {})
+            if "data-module" in anc_attrs:
+                module = anc_attrs["data-module"]
+                best = self._best_attr(attrs)
+                if best and attrs.get(best):
+                    return f"[data-module='{module}'] [{best}='{attrs[best]}']"
+                return f"[data-module='{module}']"
+        # 2. 元素自身的稳定属性
         for attr in ["data-test", "data-module", "id", "name"]:
             if attr in attrs and attrs[attr]:
                 return f"[{attr}='{attrs[attr]}']"
         if element_info.text:
             return f"text={element_info.text[:30]}"
+        return ""
+
+    def _best_attr(self, attrs: dict) -> str:
+        for attr in ["data-test", "data-testid", "id", "name", "aria-label"]:
+            if attr in attrs and attrs[attr]:
+                return attr
         return ""
 
     def extract_feature_point(self, xpath: str) -> dict:
@@ -91,10 +168,11 @@ class ScreenplayActionRecognizer(ActionRecognizer):
             action_type = step.action.value if hasattr(step.action, "value") else str(step.action)
 
             target_label = step.target.label if step.target and step.target.label else ""
+            target_tag = step.target.tag if step.target and step.target.tag else ""
             value = getattr(step, 'value', '') or ''
 
             base = {
-                "component": target_label.replace(" ", "_").lower() if target_label else "actor",
+                "component": sanitize_identifier(target_label, fallback_tag=target_tag or "actor") if target_label else "actor",
                 "value": value,
             }
 
@@ -139,34 +217,12 @@ class ScreenplayActionRecognizer(ActionRecognizer):
 
         return actions
 
-    def recognize_pattern(self, sequences: list) -> list[dict]:
-        if len(sequences) < 3:
-            return []
-        action_seqs = []
-        for seq in sequences:
-            actions = []
-            if isinstance(seq, list):
-                for item in seq:
-                    if isinstance(item, dict):
-                        actions.append(item.get("action", "?"))
-                    else:
-                        actions.append(str(item))
-            action_seqs.append(actions)
-        from ..adapter.base import _PrefixSpan
-        miner = _PrefixSpan(min_support=3, max_length=8)
-        frequent_patterns = miner.mine(action_seqs)
-        patterns = []
-        for pattern, count in frequent_patterns:
-            patterns.append({
-                "pattern": " → ".join(pattern),
-                "actions": list(pattern),
-                "frequency": count,
-            })
-        return patterns
 
 
 class ScreenplayCodeGenerator(CodeGenerator):
     """Screenplay 风格代码生成，优先从 KB 查询风格"""
+
+    default_base_class = "Target"
 
     def __init__(self, kb_manager=None):
         self.kb = kb_manager
@@ -178,15 +234,11 @@ class ScreenplayCodeGenerator(CodeGenerator):
         return self._render_task_class(baw_def)
 
     def generate_test_script(self, script_def: ScriptDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(SCREENPLAY_TEST_TEMPLATE)
+        template = _JINJA_ENV.from_string(SCREENPLAY_TEST_TEMPLATE)
         return template.render(s=script_def)
 
     def generate_test_data(self, data_def: TestDataDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(SCREENPLAY_FACTORY_TEMPLATE)
+        template = _JINJA_ENV.from_string(SCREENPLAY_FACTORY_TEMPLATE)
         return template.render(d=data_def)
 
     def get_import_style(self) -> ImportStyle:
@@ -246,10 +298,8 @@ class ScreenplayCodeGenerator(CodeGenerator):
         return ""
 
     def _render_target_class(self, comp_def: ComponentDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(SCREENPLAY_TARGET_TEMPLATE)
-        return template.render(class_name=comp_def.class_name, xpath=comp_def.xpath)
+        template = _JINJA_ENV.from_string(SCREENPLAY_TARGET_TEMPLATE)
+        return template.render(comp=comp_def)
 
     def _render_task_class(self, baw_def: BAWDef) -> str:
         steps_code = ""
@@ -269,9 +319,7 @@ class ScreenplayCodeGenerator(CodeGenerator):
                 else:
                     steps_code += f"        actor.attempts_to({method}({component}))\n"
 
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(SCREENPLAY_TASK_TEMPLATE)
+        template = _JINJA_ENV.from_string(SCREENPLAY_TASK_TEMPLATE)
         return template.render(class_name=baw_def.class_name, steps=steps_code.strip())
 
 
@@ -295,13 +343,13 @@ class ScreenplayDataFormatter(DataFormatter):
 # Screenplay 模板
 # ═══════════════════════════════════════════════════════════════
 
-SCREENPLAY_TARGET_TEMPLATE = '''# [AUTO-GEN] Target: {{ class_name }}
+SCREENPLAY_TARGET_TEMPLATE = '''# [AUTO-GEN] Target: {{ comp.class_name }}
 from pages.base import Target
 
 
-class {{ class_name }}(Target):
+class {{ comp.class_name }}({{ comp.base_class or "Target" }}):
     def __init__(self):
-        super().__init__("{{ xpath }}")
+        super().__init__("{{ comp.xpath }}")
 '''
 
 

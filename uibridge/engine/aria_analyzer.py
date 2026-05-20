@@ -1,9 +1,12 @@
 """ARIA 分析器 — 从页面 ARIA 快照中自动发现组件"""
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from playwright.sync_api import Page
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -17,13 +20,6 @@ class DiscoveredComponent:
     interactables: list[dict] = field(default_factory=list)
 
 
-@dataclass
-class ElementInfo:
-    """元素信息"""
-    tag: str
-    attrs: dict = field(default_factory=dict)
-    text: str = ""
-    ancestor_chain: list[str] = field(default_factory=list)
 
 
 class AriaAnalyzer:
@@ -161,7 +157,8 @@ class AriaAnalyzer:
                 children=r.get("children", []),
                 interactables=r.get("interactables", []),
             ) for r in (raw or [])]
-        except Exception:
+        except Exception as e:
+            logger.warning("Div-based component discovery failed: %s", e)
             return []
 
     def _discover_standard_components(self) -> list[DiscoveredComponent]:
@@ -170,7 +167,11 @@ class AriaAnalyzer:
         for role, component_type in self.ARIA_TO_COMPONENT.items():
             try:
                 elements = self.page.locator(f'[role="{role}"]').all()
-                for el in elements:
+            except Exception as e:
+                logger.warning("Failed to locate role=%s: %s", role, e)
+                continue
+            for el in elements:
+                try:
                     xpath = self._build_stable_xpath(el)
                     children_els = self._extract_children(el)
                     inputs = []
@@ -185,8 +186,9 @@ class AriaAnalyzer:
                             inputs=inputs,
                             interactables=self._find_interactables(el),
                         ))
-            except Exception:
-                continue
+                except Exception as e:
+                    logger.warning("Failed to process element for role=%s: %s", role, e)
+                    continue
         return components
 
     def _discover_custom_components(self) -> list[DiscoveredComponent]:

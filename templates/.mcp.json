@@ -7,7 +7,7 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["@anthropic/mcp-server-playwright", "--headless"],
+      "args": ["@playwright/mcp", "--headless"],
       "description": "Playwright 浏览器自动化 — 用于页面分析和录制"
     }
   }

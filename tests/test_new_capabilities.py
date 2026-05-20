@@ -921,3 +921,202 @@ class TestMCPHelpers:
         result = _sanitize_output_path("../../../etc/passwd")
         assert result.name == "passwd"
         assert not str(result).startswith("/etc")
+
+
+# ═══════════════════════════════════════════════════════════════
+# KBStore — 搜索功能
+# ═══════════════════════════════════════════════════════════════
+
+class TestKBStoreSearch:
+    """KBStore.search() 和 _keyword_search() 测试"""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        import tempfile
+        self.tmpdir = tempfile.TemporaryDirectory()
+        from uibridge.kb.kb_store import KBStore
+        self.store = KBStore(str(self.tmpdir.name))
+        # 播种测试数据
+        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+        self.items = [
+            KBItem(id="t1", category="components", key="component_type.ButtonAW",
+                   value={"xpath": "//button[@data-test='submit']"},
+                   confidence=Confidence(score=0.9, source=KnowledgeSource.HUMAN_INJECTION),
+                   description="Submit button component", tags=["button", "submit"]),
+            KBItem(id="t2", category="components", key="component_type.TableAW",
+                   value={"xpath": "//table[@data-module='user-list']"},
+                   confidence=Confidence(score=0.7, source=KnowledgeSource.STATIC_ANALYSIS),
+                   description="User list table with pagination", tags=["table", "user", "pagination"]),
+            KBItem(id="t3", category="conventions", key="convention.locator.priority",
+                   value={"priority": ["data-testid", "id", "xpath"]},
+                   confidence=Confidence(score=0.85, source=KnowledgeSource.HUMAN_INJECTION),
+                   description="定位器优先级约定", tags=["locator", "convention"]),
+            KBItem(id="t4", category="patterns", key="pattern.login_flow",
+                   value={"steps": ["enter_username", "enter_password", "click_login"]},
+                   confidence=Confidence(score=0.5, source=KnowledgeSource.LLM_INFERENCE),
+                   description="Login flow pattern", tags=["login", "auth"]),
+        ]
+        for item in self.items:
+            self.store.save(item)
+
+    def teardown_method(self):
+        self.tmpdir.cleanup()
+
+    def test_search_exact_match(self):
+        """精确子串匹配返回结果并按置信度排序"""
+        results = self.store.search("ButtonAW")
+        assert len(results) >= 1
+        # 最高置信度项排最前
+        assert results[0].confidence.effective_score >= results[-1].confidence.effective_score
+
+    def test_search_keyword_fallback(self):
+        """无精确匹配时回退到 IDF 关键词搜索"""
+        results = self.store.search("table pagination")
+        assert len(results) >= 1
+        assert any("TableAW" in r.key for r in results)
+
+    def test_search_cjk_query(self):
+        """中文查询词（CJK 分词）"""
+        results = self.store.search("定位器")
+        assert len(results) >= 1
+        assert any("locator" in r.key for r in results)
+
+    def test_search_empty_results_for_unmatched(self):
+        """无匹配时应返回空列表"""
+        results = self.store.search("zzz_nonexistent_xyz")
+        assert results == []
+
+    def test_search_ranks_by_combined_score(self):
+        """高置信度 + 高相关性排在最前"""
+        results = self.store.search("component")
+        assert len(results) >= 2
+        # t1 (confidence=0.9) 应排在 t2 (confidence=0.7) 前面
+        scores = [r.confidence.effective_score for r in results]
+        assert scores == sorted(scores, reverse=True), \
+            f"Results should be sorted by confidence desc, got {scores}"
+
+    def test_keyword_search_ignores_low_relevance(self):
+        """关键词搜索中极低相关性的项应被过滤"""
+        results = self.store._keyword_search("login", min_score=0.1)
+        assert len(results) >= 1
+        # t4 与 "login" 强相关，t1/t2/t3 不相关
+        keys = [r.key for r in results]
+        assert "pattern.login_flow" in keys
+
+    def test_keyword_search_empty_tokens(self):
+        """空查询词返回空"""
+        results = self.store._keyword_search("")
+        assert results == []
+
+    def test_keyword_search_single_token(self):
+        """单 token 查询正常工作"""
+        results = self.store._keyword_search("button")
+        assert len(results) >= 1
+        assert any("ButtonAW" in r.key for r in results)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Screenplay / JavaFluent — 扩展 ARIA 角色映射
+# ═══════════════════════════════════════════════════════════════
+
+class TestScreenplayARIAExpanded:
+    """验证 Screenplay 适配器 ARIA role → 正确类型名"""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from uibridge.adapter.screenplay import ScreenplayComponentResolver
+        self.resolver = ScreenplayComponentResolver()
+
+    def test_table_resolves_to_table_target(self):
+        assert self.resolver.resolve_type("table", {}, "") == "TableTarget"
+
+    def test_grid_resolves_to_table_target(self):
+        assert self.resolver.resolve_type("grid", {}, "") == "TableTarget"
+
+    def test_textbox_resolves_to_input_target(self):
+        assert self.resolver.resolve_type("textbox", {}, "") == "InputTarget"
+
+    def test_searchbox_resolves_to_input_target(self):
+        assert self.resolver.resolve_type("searchbox", {}, "") == "InputTarget"
+
+    def test_button_resolves_to_button_target(self):
+        assert self.resolver.resolve_type("button", {}, "") == "ButtonTarget"
+
+    def test_combobox_resolves_to_dropdown_target(self):
+        assert self.resolver.resolve_type("combobox", {}, "") == "DropdownTarget"
+
+    def test_checkbox_resolves(self):
+        assert self.resolver.resolve_type("checkbox", {}, "") == "CheckboxTarget"
+
+    def test_dialog_resolves(self):
+        assert self.resolver.resolve_type("dialog", {}, "") == "DialogTarget"
+
+    def test_unknown_role_falls_back_to_target(self):
+        assert self.resolver.resolve_type("unknown_role", {}, "") == "Target"
+
+    def test_all_mapped_roles_have_methods(self):
+        """每个映射类型都应有对应的方法模板"""
+        for role, expected_type in [
+            ("table", "TableTarget"),
+            ("form", "FormTarget"),
+            ("textbox", "InputTarget"),
+            ("button", "ButtonTarget"),
+            ("combobox", "DropdownTarget"),
+            ("checkbox", "CheckboxTarget"),
+            ("link", "LinkTarget"),
+            ("dialog", "DialogTarget"),
+        ]:
+            methods = self.resolver.get_methods_for_role(expected_type, role)
+            assert len(methods) > 0, f"{expected_type} should have methods for role={role}"
+            assert all(hasattr(m, "name") for m in methods), \
+                f"All methods for {expected_type} should have 'name'"
+
+
+class TestJavaFluentARIAExpanded:
+    """验证 JavaFluent 适配器 ARIA role → 正确类型名"""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from uibridge.adapter.java_fluent import FluentComponentResolver
+        self.resolver = FluentComponentResolver()
+
+    def test_table_resolves_to_table_element(self):
+        assert self.resolver.resolve_type("table", {}, "") == "TableElement"
+
+    def test_textbox_resolves_to_input_element(self):
+        assert self.resolver.resolve_type("textbox", {}, "") == "InputElement"
+
+    def test_button_resolves_to_button_element(self):
+        assert self.resolver.resolve_type("button", {}, "") == "ButtonElement"
+
+    def test_combobox_resolves_to_dropdown_element(self):
+        assert self.resolver.resolve_type("combobox", {}, "") == "DropdownElement"
+
+    def test_checkbox_resolves(self):
+        assert self.resolver.resolve_type("checkbox", {}, "") == "CheckboxElement"
+
+    def test_link_resolves(self):
+        assert self.resolver.resolve_type("link", {}, "") == "LinkElement"
+
+    def test_dialog_resolves(self):
+        assert self.resolver.resolve_type("dialog", {}, "") == "DialogElement"
+
+    def test_unknown_role_falls_back_to_page_element(self):
+        assert self.resolver.resolve_type("unknown_role", {}, "") == "PageElement"
+
+    def test_all_mapped_roles_have_methods(self):
+        """每个映射类型都应有对应的方法模板"""
+        for role, expected_type in [
+            ("table", "TableElement"),
+            ("form", "FormElement"),
+            ("textbox", "InputElement"),
+            ("button", "ButtonElement"),
+            ("combobox", "DropdownElement"),
+            ("checkbox", "CheckboxElement"),
+            ("link", "LinkElement"),
+            ("dialog", "DialogElement"),
+        ]:
+            methods = self.resolver.get_methods_for_role(expected_type, role)
+            assert len(methods) > 0, f"{expected_type} should have methods for role={role}"
+            assert all(hasattr(m, "name") for m in methods), \
+                f"All methods for {expected_type} should have 'name'"

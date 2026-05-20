@@ -102,30 +102,69 @@ class KBStore:
         # 回退：关键词相关性
         return self._keyword_search(query)
 
-    def _keyword_search(self, query: str) -> list[KBItem]:
-        """关键词分词 → 相关性评分 → 排序返回。语义搜索的核心。
+    def _keyword_search(self, query: str, min_score: float = 0.05) -> list[KBItem]:
+        """IDF 加权语义搜索。
 
-        将 query 拆分为关键词（2-gram 滑动窗口 + 单个词），
-        对每个 KB item 计算匹配得分，只返回有匹配的。
+        将 query 拆分为词元（ASCII 单词 + CJK 字符独立成词），
+        对每个 item 计算 IDF 加权余弦相似度，结合置信度排序。
         """
+        import math
         import re
-        tokens_raw = re.findall(r'[\w一-鿿]+', query.lower())
-        # 生成 1-gram 和 2-gram
-        tokens = set(tokens_raw)
-        for i in range(len(tokens_raw) - 1):
-            tokens.add(tokens_raw[i] + tokens_raw[i + 1])
 
-        if not tokens:
+        # ── 分词：ASCII 单词 + CJK 单字 ──
+        tokens_raw = re.findall(r'[a-zA-Z0-9_]+|[一-鿿]', query.lower())
+        if not tokens_raw:
             return []
 
-        scored = []
-        for item in self.list_all():
+        # ── 构建文档集合 ──
+        all_items = self.list_all()
+        if not all_items:
+            return []
+
+        # 每个 item 的文本表示
+        item_texts = {}
+        for item in all_items:
             text = f"{item.key} {item.description} {' '.join(item.tags)} {str(item.value)}"
-            text_lower = text.lower()
-            score = sum(1 for t in tokens if t in text_lower)
-            if score > 0:
-                # 加权：置信度 × 关键词命中率
-                relevance = score / len(tokens)
+            item_texts[item.id] = text.lower()
+
+        # ── 计算 IDF ──
+        N = len(all_items)
+        idf = {}
+        for token in set(tokens_raw):
+            df = sum(1 for text in item_texts.values() if token in text)
+            idf[token] = math.log((N + 1) / (df + 1)) + 1  # smooth IDF
+
+        # ── 查询向量 ──
+        query_tf = {}
+        for t in tokens_raw:
+            query_tf[t] = query_tf.get(t, 0) + 1
+        query_norm = math.sqrt(sum((query_tf[t] * idf.get(t, 0)) ** 2 for t in query_tf))
+
+        if query_norm == 0:
+            return []
+
+        # ── 对每个 item 计算余弦相似度 ──
+        scored = []
+        for item in all_items:
+            text = item_texts[item.id]
+            # item 的 TF-IDF 向量（只对查询中出现的词计算）
+            dot = 0.0
+            item_norm_sq = 0.0
+            for token in set(tokens_raw):
+                w = idf.get(token, 0)
+                if w == 0:
+                    continue
+                tf = text.count(token)
+                dot += query_tf.get(token, 0) * w * tf * w
+                item_norm_sq += (tf * w) ** 2
+            item_norm = math.sqrt(item_norm_sq)
+
+            if item_norm > 0:
+                relevance = dot / (query_norm * item_norm)
+            else:
+                relevance = 0.0
+
+            if relevance >= min_score:
                 combined = relevance * 0.5 + item.confidence.effective_score * 0.5
                 scored.append((combined, item))
 

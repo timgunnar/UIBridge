@@ -151,6 +151,8 @@ Agent：了解。读取 ADAPTER_GUIDE.md → 分析 pom.xml → 学习 pages/*.j
 
 ## Agent 工具参考
 
+详细说明见 [MCP 工具参考](mcp-tools.md)。
+
 | MCP 工具 | 用途 |
 |---------|------|
 | `analyze_page` | 分析页面组件 |

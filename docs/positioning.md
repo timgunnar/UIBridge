@@ -53,7 +53,7 @@ graph LR
     end
 ```
 
-AI Agent 自动获得 8 个 MCP 工具，无需任何额外配置。
+AI Agent 自动获得 9 个 MCP 工具，无需任何额外配置。
 
 ### 3. 交互录制 → 分层代码
 
@@ -64,6 +64,10 @@ sequenceDiagram
     participant B as 浏览器
 
     U->>A: "帮我测用户管理搜索"
+    A->>B: open_browser()
+    A->>U: "请做预置操作"
+    U->>B: [预置：登录、导航]
+    U->>A: "好了"
     A->>B: start_recording()
     A->>U: "请操作，完成后告诉我"
     U->>B: [操作：输入、点击、查看]

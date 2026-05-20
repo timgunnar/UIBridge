@@ -3,6 +3,8 @@
 import re
 from typing import Optional
 
+from jinja2 import Environment, BaseLoader
+
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
@@ -11,24 +13,89 @@ from .base import (
     ImportStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
     scan_java_source_for_package,
+    sanitize_identifier,
+    _to_java_type,
+    to_java_class_name,
+    post_process_java_code,
+    format_action_params,
 )
+
+_JINJA_ENV = Environment(loader=BaseLoader())
+_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 class FluentComponentResolver(ComponentResolver):
-    """PageFactory: 所有组件用 @FindBy 定位，统一为 PageElement"""
+    """PageFactory: 组件用 @FindBy 定位，按类型分化为不同 PageElement 子类"""
 
     ARIA_MAP = {
-        "table": "PageElement", "grid": "PageElement",
-        "form": "PageElement", "dialog": "PageElement",
-        "combobox": "PageElement", "listbox": "PageElement",
-        "textbox": "PageElement", "searchbox": "PageElement",
-        "button": "PageElement", "link": "PageElement",
+        "table": "TableElement", "grid": "TableElement", "treegrid": "TableElement",
+        "form": "FormElement",
+        "textbox": "InputElement", "searchbox": "InputElement", "spinbutton": "SpinnerElement",
+        "checkbox": "CheckboxElement", "radio": "RadioElement", "switch": "ToggleElement",
+        "combobox": "DropdownElement", "listbox": "DropdownElement",
+        "slider": "SliderElement", "option": "OptionElement",
+        "menu": "MenuElement", "menubar": "MenuElement",
+        "tablist": "TabElement", "tab": "TabElement",
+        "tree": "TreeElement", "treeitem": "TreeItemElement",
+        "navigation": "NavElement", "link": "LinkElement", "button": "ButtonElement",
+        "dialog": "DialogElement", "alert": "AlertElement", "alertdialog": "DialogElement",
+        "banner": "BannerElement", "tooltip": "TooltipElement",
+        "progressbar": "ProgressElement", "status": "StatusElement",
+        "log": "LogElement", "timer": "TimerElement",
+        "region": "RegionElement", "group": "GroupElement",
+        "list": "ListElement", "listitem": "ListItemElement",
+        "separator": "SeparatorElement",
+        "img": "ImageElement", "heading": "HeadingElement",
+        "main": "MainElement", "contentinfo": "FooterElement",
     }
 
     METHOD_TEMPLATES = {
+        "TableElement": [
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("getRowCount", [], "read", "int"),
+            MethodTemplate("getCellText", [{"name": "row", "type": "int"}, {"name": "col", "type": "int"}], "read", "String"),
+            MethodTemplate("shouldBeVisible", [], "assertion"),
+            MethodTemplate("shouldContain", [{"name": "text", "type": "String"}], "assertion"),
+        ],
+        "FormElement": [
+            MethodTemplate("submit", [], "click"),
+            MethodTemplate("reset", [], "click"),
+            MethodTemplate("shouldBeVisible", [], "assertion"),
+        ],
+        "InputElement": [
+            MethodTemplate("enter", [{"name": "text", "type": "String"}], "input"),
+            MethodTemplate("clear", [], "input"),
+            MethodTemplate("getText", [], "read", "String"),
+            MethodTemplate("shouldContain", [{"name": "text", "type": "String"}], "assertion"),
+        ],
+        "ButtonElement": [
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("shouldBeVisible", [], "assertion"),
+            MethodTemplate("shouldBeEnabled", [], "assertion"),
+        ],
+        "DropdownElement": [
+            MethodTemplate("selectByValue", [{"name": "value", "type": "String"}], "select"),
+            MethodTemplate("selectByIndex", [{"name": "index", "type": "int"}], "select"),
+            MethodTemplate("getSelectedText", [], "read", "String"),
+            MethodTemplate("shouldBeVisible", [], "assertion"),
+        ],
+        "CheckboxElement": [
+            MethodTemplate("check", [], "click"),
+            MethodTemplate("uncheck", [], "click"),
+            MethodTemplate("isChecked", [], "read", "boolean"),
+        ],
+        "LinkElement": [
+            MethodTemplate("click", [], "click"),
+            MethodTemplate("getHref", [], "read", "String"),
+            MethodTemplate("shouldBeVisible", [], "assertion"),
+        ],
+        "DialogElement": [
+            MethodTemplate("accept", [], "click"),
+            MethodTemplate("dismiss", [], "click"),
+            MethodTemplate("shouldBeVisible", [], "assertion"),
+        ],
         "PageElement": [
             MethodTemplate("click", [], "click"),
-            MethodTemplate("enter", [{"name": "text", "type": "String"}], "input"),
             MethodTemplate("getText", [], "read", "String"),
             MethodTemplate("shouldBeVisible", [], "assertion"),
             MethodTemplate("shouldContain", [{"name": "text", "type": "String"}], "assertion"),
@@ -39,20 +106,22 @@ class FluentComponentResolver(ComponentResolver):
         self.kb = kb_manager
 
     def resolve_type(self, aria_role: str, dom_attrs: dict, snapshot_context: str) -> str:
-        return "PageElement"
+        role_map = self._resolve_aria_map()
+        return role_map.get(aria_role.lower(), "PageElement")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
         data_module = dom_attrs.get("data-module", "")
         if data_module:
-            return re.sub(r'[-_\s]', '', data_module).upper()
+            return to_java_class_name(data_module)
         domain = self._extract_domain(url)
-        return f"{domain.upper()}_{aria_role.upper()}" if aria_role else "PAGE_ELEMENT"
+        role = aria_role or "Element"
+        return f"{to_java_class_name(domain)}{to_java_class_name(role)}"
 
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:
-        return self.METHOD_TEMPLATES.get("PageElement", [])
+        return self.METHOD_TEMPLATES.get(component_type, self.METHOD_TEMPLATES.get("PageElement", []))
 
     def _extract_domain(self, url: str) -> str:
-        match = re.search(r'/(\w+)/(manage|list|create)', url)
+        match = _DOMAIN_RE.search(url)
         return match.group(1) if match else "unknown"
 
 
@@ -66,6 +135,16 @@ class FluentLocatorStrategy(LocatorStrategy):
 
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
+        # 1. 向上查找最近的 data-module 祖先
+        for ancestor in element_info.ancestor_chain:
+            anc_attrs = ancestor.get("attrs", {})
+            if "data-module" in anc_attrs:
+                module = anc_attrs["data-module"]
+                best = self._best_attr(attrs)
+                if best and attrs.get(best):
+                    return f"[data-module='{module}'] [{best}='{attrs[best]}']"
+                return f"[data-module='{module}']"
+        # 2. 元素自身的稳定属性
         if "id" in attrs and attrs["id"]:
             return f"#{attrs['id']}"
         for attr in ["data-test", "data-testid"]:
@@ -73,6 +152,12 @@ class FluentLocatorStrategy(LocatorStrategy):
                 return f"[{attr}='{attrs[attr]}']"
         if "name" in attrs and attrs["name"]:
             return f"*[name='{attrs['name']}']"
+        return ""
+
+    def _best_attr(self, attrs: dict) -> str:
+        for attr in ["id", "data-test", "data-testid", "name"]:
+            if attr in attrs and attrs[attr]:
+                return attr
         return ""
 
     def extract_feature_point(self, xpath: str) -> dict:
@@ -83,78 +168,88 @@ class FluentLocatorStrategy(LocatorStrategy):
         return {"type": "css", "value": xpath}
 
     def get_locator_priority(self) -> list[str]:
-        if self.kb:
-            kb_conventions = self.kb.get_locator_conventions()
-            if kb_conventions and "priority" in kb_conventions:
-                return kb_conventions["priority"]
-        return self.PRIORITY
+        return self._resolve_locator_priority()
 
 
 class FluentActionRecognizer(ActionRecognizer):
-    """Fluent: DOM 操作 → 返回 this 的链式方法"""
+    """Fluent: DOM 操作 → 返回 this 的链式方法，含 buffer 聚合"""
 
     def aggregate(self, raw_steps: list, page_context: dict) -> list:
         actions = []
+        buffer = []
+        current_type = None
+
         for step in raw_steps:
             if isinstance(step, dict):
                 step_type = step.get("action", "")
             else:
                 step_type = step.action.value if hasattr(step.action, "value") else str(step.action)
 
-            target_label = ""
-            value = ""
-            if isinstance(step, dict):
-                t = step.get("target", {})
-                if isinstance(t, dict):
-                    target_label = t.get("label", "")
-                value = step.get("value", "")
-            elif hasattr(step, 'target') and step.target:
-                target_label = step.target.label or ""
-                value = getattr(step, 'value', '') or ''
-
-            base = {
-                "raw_steps": [step],
-                "component": target_label.replace(" ", "_").lower() if target_label else "page",
-                "value": value,
-            }
-            if step_type == "input":
-                actions.append({**base, "type": "fluent_action", "action": "enterAndContinue"})
+            if step_type == "navigate":
+                if buffer:
+                    actions.append(self._aggregate_buffer(buffer, current_type))
+                    buffer = []
+                current_type = "navigation"
+                buffer.append(step)
+            elif step_type in ("input", "fill"):
+                if current_type == "click":
+                    actions.append(self._aggregate_buffer(buffer, current_type))
+                    buffer = []
+                buffer.append(step)
+                current_type = "input"
             elif step_type == "click":
-                actions.append({**base, "type": "fluent_action", "action": "clickAndContinue"})
-            elif step_type == "navigate":
-                actions.append({**base, "type": "fluent_action", "action": "navigateTo"})
-            elif step_type:
-                actions.append({**base, "type": "fluent_action", "action": step_type})
+                if current_type == "input":
+                    buffer.append(step)
+                else:
+                    if buffer:
+                        actions.append(self._aggregate_buffer(buffer, current_type))
+                        buffer = []
+                    buffer.append(step)
+                current_type = "click"
+            else:
+                if buffer:
+                    actions.append(self._aggregate_buffer(buffer, current_type))
+                    buffer = []
+                buffer.append(step)
+                current_type = step_type
+
+        if buffer:
+            actions.append(self._aggregate_buffer(buffer, current_type))
         return actions
 
-    def recognize_pattern(self, sequences: list) -> list[dict]:
-        if len(sequences) < 3:
-            return []
-        action_seqs = []
-        for seq in sequences:
-            actions = []
-            if isinstance(seq, list):
-                for item in seq:
-                    if isinstance(item, dict):
-                        actions.append(item.get("action", "?"))
-                    else:
-                        actions.append(str(item))
-            action_seqs.append(actions)
-        from ..adapter.base import _PrefixSpan
-        miner = _PrefixSpan(min_support=3, max_length=8)
-        frequent_patterns = miner.mine(action_seqs)
-        patterns = []
-        for pattern, count in frequent_patterns:
-            patterns.append({
-                "pattern": " → ".join(pattern),
-                "actions": list(pattern),
-                "frequency": count,
-            })
-        return patterns
+    def _aggregate_buffer(self, buffer: list, action_type: str) -> dict:
+        if not buffer:
+            return {}
+        first = buffer[0]
+        target_label = ""
+        target_tag = ""
+        value = ""
+        if isinstance(first, dict):
+            t = first.get("target", {})
+            if isinstance(t, dict):
+                target_label = t.get("label", "")
+                target_tag = t.get("tag", "")
+            value = first.get("value", "")
+        elif hasattr(first, 'target') and first.target:
+            target_label = first.target.label or ""
+            target_tag = first.target.tag or ""
+            value = getattr(first, 'value', '') or ''
+
+        base = {
+            "raw_steps": list(buffer),
+            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
+            "value": value,
+        }
+        if action_type == "input" and len(buffer) >= 2:
+            return {**base, "type": "composite_action", "action": "fillAndSubmit", "steps": len(buffer)}
+        return {**base, "type": "fluent_action", "action": action_type, "steps": len(buffer)}
+
 
 
 class FluentCodeGenerator(CodeGenerator):
     """生成 Fluent API + PageFactory + AssertJ 风格"""
+    target_language = "java"
+    default_base_class = "PageElement"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
@@ -200,39 +295,22 @@ class FluentCodeGenerator(CodeGenerator):
 
         return None
 
-    def _post_process(self, code: str) -> str:
-        """后处理：默认包时移除 package 行和项目内 import。"""
-        if self.package:
-            return code
-        code = re.sub(r'^\s*package\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
-        code = re.sub(r'^\s*import\s+\.[^;]+;\s*\n?', '', code, flags=re.MULTILINE)
-        code = re.sub(r'\n{3,}', '\n\n', code)
-        return code.strip() + '\n'
-
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(FLUENT_ELEMENT_TEMPLATE)
-        return self._post_process(template.render(comp=comp_def, package=self.package))
+        template = _JINJA_ENV.from_string(FLUENT_ELEMENT_TEMPLATE)
+        return post_process_java_code(template.render(comp=comp_def, package=self.package), self.package)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(FLUENT_PAGE_TEMPLATE)
-        return self._post_process(template.render(baw=baw_def, package=self.package))
+        template = _JINJA_ENV.from_string(FLUENT_PAGE_TEMPLATE)
+        return post_process_java_code(template.render(baw=baw_def, package=self.package), self.package)
 
     def generate_test_script(self, script_def: ScriptDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        template = env.from_string(FLUENT_TEST_TEMPLATE)
-        return self._post_process(template.render(s=script_def, package=self.package))
+        template = _JINJA_ENV.from_string(FLUENT_TEST_TEMPLATE)
+        return post_process_java_code(template.render(s=script_def, package=self.package), self.package)
 
     def generate_test_data(self, data_def: TestDataDef) -> str:
-        from jinja2 import Environment, BaseLoader
-        env = Environment(loader=BaseLoader())
-        env.filters["repr"] = lambda v: repr(v)
-        template = env.from_string(FLUENT_DATA_BUILDER_TEMPLATE)
-        return self._post_process(template.render(d=data_def, package=self.package))
+        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = _JINJA_ENV.from_string(FLUENT_DATA_BUILDER_TEMPLATE)
+        return post_process_java_code(template.render(d=data_def, package=self.package), self.package)
 
     def get_import_style(self) -> ImportStyle:
         if self.kb:
@@ -279,12 +357,7 @@ class FluentCodeGenerator(CodeGenerator):
             call = step.calls[0]
             component = call.component or "page"
             method = call.method
-            parts = []
-            for a in call.args:
-                parts.append(f'"{a}"' if isinstance(a, str) else str(a))
-            for k, v in call.kwargs.items():
-                parts.append(f'"{v}"' if isinstance(v, str) else str(v))
-            args_str = ", ".join(parts)
+            args_str = format_action_params(call)
             if args_str:
                 return f"{component}.{method}({args_str});"
             return f"{component}.{method}();"
@@ -343,10 +416,10 @@ class FluentDataFormatter(DataFormatter):
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
         domain = data_context.get("domain", "unknown")
-        class_name = f"{self._java_class_name(domain)}Builder"
+        class_name = f"{to_java_class_name(domain)}Builder"
         fields = {}
         for key, value in captured_values.items():
-            java_type = "String" if isinstance(value, str) else type(value).__name__
+            java_type = _to_java_type(value)
             fields[key] = {"value": value, "type": java_type}
         return TestDataDef(
             file_path=f"src/test/java/builders/{class_name}.java",
@@ -355,14 +428,10 @@ class FluentDataFormatter(DataFormatter):
         )
 
     def get_data_ref_style(self, domain: str) -> str:
-        class_name = f"{self._java_class_name(domain)}Builder"
+        class_name = f"{to_java_class_name(domain)}Builder"
         if self.package:
             return f"import {self.package}.builders.{class_name};"
-        return f"import builders.{class_name};"
-
-    def _java_class_name(self, name: str) -> str:
-        parts = re.split(r'[-_\s]', name)
-        return "".join(p.capitalize() for p in parts if p)
+        return f"import builders.{class_name}";
 
 
 # ═══════════════════════════════════════════════════════════════

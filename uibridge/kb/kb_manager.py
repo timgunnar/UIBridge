@@ -214,14 +214,18 @@ class KBManager:
         self._archive_low_confidence()
 
     def _apply_decay(self):
-        """Apply confidence decay to items not recently validated."""
+        """Apply confidence decay to items not recently validated.
+
+        Persists the decayed effective score as the new baseline and
+        updates last_validated_at to prevent compounding decay.
+        """
+        now = time.time()
         for item in self.store.list_all():
             if item.confidence.decay_rate > 0 and not item.archived:
-                # Force re-read of effective_score (which applies decay)
-                score_before = item.confidence.score
                 score_after = item.confidence.effective_score
-                if score_after < score_before:
+                if score_after < item.confidence.score:
                     item.confidence.score = score_after
+                    item.confidence.last_validated_at = now
                     self.store.save(item)
 
     def _generalize_patterns(self):

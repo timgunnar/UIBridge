@@ -1,66 +1,17 @@
 """CLI 入口 — uibridge 命令行工具"""
 
+import logging
 import sys
 import json
 from pathlib import Path
 
 import click
-import yaml
 from playwright.sync_api import sync_playwright
 
 from .pipeline import Pipeline
-from .adapter.reference import (
-    ReferenceComponentResolver,
-    ReferenceLocatorStrategy,
-    ReferenceActionRecognizer,
-    ReferenceCodeGenerator,
-    ReferenceDataFormatter,
-)
+from .adapter.loader import load_adapter
 
-
-# ═══════════════════════════════════════════════════════════════
-# 适配器工厂
-# ═══════════════════════════════════════════════════════════════
-
-def load_adapter(adapter_config_path: str = None) -> tuple:
-    """加载适配器配置，返回 5 个接口实例"""
-    if adapter_config_path and Path(adapter_config_path).exists():
-        config_path = Path(adapter_config_path)
-        raw = config_path.read_text("utf-8")
-        if config_path.suffix in (".yaml", ".yml"):
-            config = yaml.safe_load(raw)
-        else:
-            config = json.loads(raw)
-        adapters = config.get("adapter", {})
-        components_config = adapters.get("components", {})
-        if components_config:
-            return _import_adapter_from_config(components_config)
-
-    # 默认：参考实现
-    return (
-        ReferenceComponentResolver(),
-        ReferenceLocatorStrategy(),
-        ReferenceActionRecognizer(),
-        ReferenceCodeGenerator(),
-        ReferenceDataFormatter(),
-    )
-
-
-def _import_adapter_from_config(components_config: dict) -> tuple:
-    import importlib
-
-    def load(cls_path: str):
-        module_path, class_name = cls_path.rsplit(".", 1)
-        module = importlib.import_module(module_path)
-        return getattr(module, class_name)()
-
-    return (
-        load(components_config.get("resolver", "uibridge.adapter.reference.ReferenceComponentResolver")),
-        load(components_config.get("locator", "uibridge.adapter.reference.ReferenceLocatorStrategy")),
-        load(components_config.get("recognizer", "uibridge.adapter.reference.ReferenceActionRecognizer")),
-        load(components_config.get("generator", "uibridge.adapter.reference.ReferenceCodeGenerator")),
-        load(components_config.get("data_formatter", "uibridge.adapter.reference.ReferenceDataFormatter")),
-    )
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -68,7 +19,7 @@ def _import_adapter_from_config(components_config: dict) -> tuple:
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.3.0")
+@click.version_option(version="0.3.1")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 
@@ -137,7 +88,7 @@ def generate(input_file: str, output_dir: str, adapter_config: str):
     results = pipeline.generate_and_verify(call_seq, recording)
 
     # 检测语言决定文件扩展名
-    ext = ".java" if "java" in str(type(pipeline.code_generator)).lower() else ".py"
+    ext = ".java" if getattr(pipeline.code_generator, "target_language", "python") == "java" else ".py"
 
     passed = 0
     for result in results:
@@ -300,8 +251,8 @@ def _scan_artifacts(cwd: Path) -> list[Path]:
                 content = fpath.read_text("utf-8")
                 if "uibridge" in content.lower():
                     artifacts.append(fpath)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to read %s for artifact scan: %s", fpath, e)
 
     # .claude/skills/uibridge.md
     skill_file = cwd / ".claude" / "skills" / "uibridge.md"
