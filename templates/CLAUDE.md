@@ -67,7 +67,7 @@
 ### 首次接入
 
 1. 确保 `pip install -e .` 已在 uibridge 目录执行
-2. 检查 `.uibridge/adapter.yaml` 存在（没有则从 uibridge 的 `templates/adapter.yaml` 复制并调整 `base_package`）
+2. 检查 `.uibridge/adapter.yaml` 存在（没有则从 uibridge 的 `templates/adapter.yaml` 复制，base_package 由 uibridge 自动扫描推断）
 3. KB 会在首次使用 `analyze_page` / `generate_test_code` 时自动播种（无需手动调用）。如需显式触发：`seed_knowledge_base(project_dir=".")`
 4. 报告发现了多少组件、页面、约定
 

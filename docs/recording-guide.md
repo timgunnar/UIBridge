@@ -79,7 +79,7 @@ recording.json
     → 自检：运行 pytest / javac 验证代码可执行
 ```
 
-**生成产物**（四层结构）：
+**生成产物**（分层结构）：
 
 ```
 generated/
@@ -87,7 +87,7 @@ generated/
 └── data/UserSearchData.java          ← TestData（测试数据）
 ```
 
-代码本身遵循 ComponentAW → BusinessAW → TestScript + TestData 四层结构，维护时只改对应层即可。
+代码本身遵循 ComponentAW → BusinessAW → TestScript + TestData 分层结构，维护时只改对应层即可。
 
 AI 报告："生成了 1 个测试用例，自检通过。"
 

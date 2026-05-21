@@ -30,4 +30,4 @@ project:
   language: java
   test_framework: testng
   build_tool: maven
-  base_package: com.enterprise  # ← 改成你项目的 base package
+  base_package: com.enterprise  # 自动从项目源码扫描推断，无需手动修改

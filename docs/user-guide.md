@@ -59,23 +59,14 @@ cp templates/.mcp.json    /path/to/your-project/
 cp templates/adapter.yaml /path/to/your-project/.uibridge/
 ```
 
-### 改一行配置
-
-编辑 `.uibridge/adapter.yaml` — 只改 `base_package`：
-
-```yaml
-project:
-  base_package: com.yourcompany.uitest  # ← 改成你的包名
-```
-
-### 启动
+### 启动 Agent
 
 ```bash
 cd /path/to/your-project
 claude
 ```
 
-Agent 自动检测框架 → 扫描源码播种知识库 → 报告就绪。
+`base_package` 等配置由 uibridge 首次调用工具时自动从项目源码扫描推断，无需手动设置。
 
 ---
 
