@@ -361,7 +361,7 @@ class PlaywrightCodeGenerator(CodeGenerator):
             self.package = package_name
         else:
             pkg = self._resolve_package()
-            self.package = pkg if pkg is not None else "com.baidu.test"
+            self.package = pkg if pkg is not None else "com.enterprise.test"
         self.base_page = base_page_class
         self.test_framework = test_framework
 
@@ -466,8 +466,30 @@ class PlaywrightCodeGenerator(CodeGenerator):
         if kind and kind.value == "assert" and step.calls:
             msg = step.calls[0].args[0] if step.calls[0].args else step.comment
             if msg:
-                return f"// assert: {msg}"
+                return self._render_assertion(msg)
             return "Assert.assertNotNull(page);"
+
+    def _render_assertion(self, candidate: str) -> str:
+        from uibridge.adapter.base import parse_assertion_candidate
+        p = parse_assertion_candidate(candidate)
+        atype = p.get("type", "unknown")
+        if atype == "url_equals":
+            return f'Assert.assertEquals(page.url(), "{p["url"]}");'
+        elif atype == "element_visible":
+            return f'Assert.assertTrue(page.isVisible("[data-module=\'{p["element"]}\']"), "{p["element"]} should be visible");'
+        elif atype == "element_absent":
+            return f'Assert.assertFalse(page.isVisible("[data-module=\'{p["element"]}\']"), "{p["element"]} should be absent");'
+        elif atype == "text_equals":
+            return f'Assert.assertEquals(page.locator("[data-module=\'{p["element"]}\']").textContent(), "{p["text"]}");'
+        elif atype == "count_changed":
+            return f'// {p["role"]} count should be {p["direction"]}'
+        elif atype == "layout_stable":
+            return f'// assert layout of \'{p["element"]}\' is stable'
+        elif atype == "generic":
+            msg = p.get("message", candidate)
+            return f'// verify: {msg}'
+        else:
+            return f'Assert.assertNotNull(page); // TODO: assert {candidate}'
 
         comment = getattr(step, 'comment', '')
         if comment:
@@ -488,7 +510,7 @@ class PlaywrightDataFormatter(DataFormatter):
             self.package = package_name
         else:
             pkg = self._resolve_package()
-            self.package = pkg if pkg is not None else "com.baidu.test"
+            self.package = pkg if pkg is not None else "com.enterprise.test"
 
     def _resolve_package(self) -> Optional[str]:
         packages: set[str] = set()

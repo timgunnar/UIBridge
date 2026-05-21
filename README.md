@@ -13,7 +13,7 @@ graph LR
         AD["5 个适配器接口<br/>学习框架约定"]
     end
     subgraph C["AI Agent"]
-        AI["Claude Code 等<br/>9 个 MCP 工具"]
+        AI["Claude Code 等<br/>10 个 MCP 工具"]
     end
     subgraph D["生成产物"]
         OUT["ComponentAW<br/>BusinessAW<br/>TestScript<br/>TestData"]
@@ -29,9 +29,9 @@ graph LR
 
 | 价值 | 说明 |
 |------|------|
-| **框架知识库** | 自动扫描源码建立，自检反馈持续演化。NL 纠错永久生效。YAML 存储、可 commit |
-| **零操作接入 AI** | 复制 3 个文件 + 改 1 行配置 → 启动 Agent 即用。AI 自动注册 9 个工具 |
-| **交互录制 → 分层代码** | 你在浏览器操作，AI 录着。生成 ComponentAW → BusinessAW → TestScript + TestData 四层结构 |
+| **框架知识库** | 自动扫描源码建立，自检反馈持续演化。NL 对话增删改查（"定位器用 data-testid"即刻生效）。每次生成自动挖掘 BAW 模式。YAML 存储、可 commit |
+| **零操作接入 AI** | 复制 3 个文件 + 改 1 行配置 → 启动 Agent 即用。AI 自动注册 10 个工具 |
+| **交互录制 → 分层代码** | 你在浏览器操作，AI 录制。内置多层噪声过滤（JS 防抖 + KB 白名单 + Pattern 匹配），生成 ComponentAW → BusinessAW → TestScript + TestData 四层结构，断言为框架原生风格 |
 | **零侵入 + 最低成本** | 不碰现有代码，已有测试继续跑。卸载: `uibridge cleanup --yes && pip uninstall uibridge -y` |
 
 ---
@@ -58,12 +58,14 @@ graph TB
 
 ```mermaid
 flowchart LR
-    S1["① 录制<br/>浏览器操作"] --> S2["② 语义分析<br/>ARIA + DOM Diff"]
-    S2 --> S3["③ 框架映射<br/>KB + 适配器"]
-    S3 --> S4["④ 生成 + 自检<br/>Jinja2 模板"]
+    S1["① 录制<br/>浏览器操作 + 噪声过滤"] --> S2["② 语义分析<br/>ARIA + DOM Diff + KB 验证"]
+    S2 --> S3["③ 框架映射<br/>KB + 适配器 + Pattern 匹配"]
+    S3 --> S4["④ 生成 + 自检<br/>Jinja2 模板 + 原生断言"]
     S4 -->|"失败: 分析修复"| S3
     S4 -->|"通过"| S5["⑤ 交付"]
 ```
+
+1 分钟录制从 360+ 步噪声降至 ~30 步业务操作。5 个适配器全部生成框架原生断言，不再是占位符。
 
 ---
 
@@ -91,7 +93,7 @@ playwright install chromium
 
 # 2. 验证
 uibridge --help
-python -m pytest tests/ -v   # 186 个测试，覆盖核心引擎/适配器/代码生成/E2E
+python -m pytest tests/ -v   # 216 个测试，覆盖核心引擎/适配器/代码生成/E2E
 
 # 3. 卸载
 uibridge cleanup --yes    # 清理项目中所有生成文件

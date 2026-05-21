@@ -94,122 +94,12 @@ def _load_adapter(adapter_config_path: Optional[str] = None):
     return load_adapter(adapter_config_path)
 
 
-def _detect_source_dirs(project_dir: str) -> dict[str, str]:
-    """自动检测 Java 项目源码目录结构，支持标准和非标布局。
-
-    优先级：
-    1. pom.xml 中声明的 <sourceDirectory> / <testSourceDirectory>
-    2. 标准 Maven 布局 src/main/java / src/test/java
-    3. 递归扫描 src/ 下的 .java 文件反推目录
-    4. 兜底返回标准路径
-    """
-    import re
-    root = Path(project_dir)
-
-    # 检查是否为 Java 项目
-    java_indicators = ["pom.xml", "build.gradle", "build.gradle.kts"]
-    is_java = any((root / f).exists() for f in java_indicators)
-    if not is_java:
-        return {"pages": "src/main/java", "tests": "src/test/java"}
-
-    # 1. 尝试从 pom.xml 读取自定义源码目录
-    pom = root / "pom.xml"
-    if pom.exists():
-        try:
-            content = pom.read_text("utf-8")
-            src_match = re.search(r'<sourceDirectory>\s*([^<\s]+)\s*</sourceDirectory>', content)
-            test_match = re.search(r'<testSourceDirectory>\s*([^<\s]+)\s*</testSourceDirectory>', content)
-            pages = src_match.group(1) if src_match else None
-            tests = test_match.group(1) if test_match else None
-            if pages or tests:
-                if pages and tests:
-                    return {"pages": pages, "tests": tests}
-                if pages:
-                    tests = _infer_test_dir(root, pages)
-                    return {"pages": pages, "tests": tests or "src/test/java"}
-        except Exception:
-            pass
-
-    # 2. 标准 Maven 布局
-    std_pages = root / "src" / "main" / "java"
-    std_tests = root / "src" / "test" / "java"
-    if std_pages.exists():
-        return {"pages": "src/main/java", "tests": "src/test/java"}
-
-    # 3. 递归扫描 src/ 反推实际目录
-    detected = _scan_java_dirs(root)
-    if detected:
-        return detected
-
-    # 4. 兜底
-    return {"pages": "src/main/java", "tests": "src/test/java"}
-
-
-def _infer_test_dir(root: Path, src_dir: str) -> str | None:
-    """根据源码目录推断测试目录。"""
-    candidates = [
-        src_dir.replace("main", "test"),
-        "src/test/java",
-        "test",
-    ]
-    for c in candidates:
-        if (root / c).exists():
-            return c
-    return None
-
-
-def _scan_java_dirs(root: Path) -> dict[str, str] | None:
-    """扫描项目中实际 .java 文件的位置，反推源码目录。"""
-    src_root = root / "src"
-    if not src_root.exists():
-        return None
-    java_files = list(src_root.glob("**/*.java"))
-    if not java_files:
-        return None
-
-    # 找最深的公共父目录
-    candidate_dirs = set()
-    test_dirs = set()
-    for f in java_files:
-        rel = f.parent.relative_to(root)
-        parts = rel.parts
-        if "test" in parts or "tests" in parts:
-            test_dirs.add(str(rel))
-        else:
-            candidate_dirs.add(str(rel))
-
-    # 找公共前缀最短的目录（越短越接近源码根）
-    if candidate_dirs:
-        main_dir = _shortest_common(candidate_dirs)
-    else:
-        main_dir = "src/main/java"
-
-    if test_dirs:
-        test_dir = _shortest_common(test_dirs)
-    else:
-        test_dir = _infer_test_dir(root, main_dir) or "src/test/java"
-
-    return {"pages": main_dir, "tests": test_dir}
-
-
-def _shortest_common(paths: set[str]) -> str:
-    """找一组路径的最短公共父目录。"""
-    if not paths:
-        return "."
-    parts_list = [p.replace("\\", "/").split("/") for p in paths]
-    common = parts_list[0]
-    for p in parts_list[1:]:
-        i = 0
-        while i < min(len(common), len(p)) and common[i] == p[i]:
-            i += 1
-        common = common[:i]
-    return "/".join(common) if common else "."
-
-
-def _build_pipeline(adapter_config_path: Optional[str] = None):
+def _build_pipeline(adapter_config_path: Optional[str] = None, project_dir: str = "."):
     from uibridge.pipeline import Pipeline
+    from uibridge.kb.kb_manager import KBManager
     resolver, locator, recognizer, code_gen, data_fmt = _load_adapter(adapter_config_path)
-    return Pipeline(resolver, locator, recognizer, code_gen, data_fmt)
+    kb = KBManager(project_dir)
+    return Pipeline(resolver, locator, recognizer, code_gen, data_fmt, project_root=project_dir, kb_manager=kb)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -416,6 +306,18 @@ async def start_recording(
 
         pipeline = _build_pipeline(adapter_config)
 
+        # KB 驱动噪声过滤：查询 KB 获取定位器属性白名单
+        locator_attrs = None
+        if pipeline.kb_manager:
+            try:
+                locator_conventions = pipeline.kb_manager.get_locator_conventions()
+                if locator_conventions:
+                    priority = locator_conventions.get("priority", [])
+                    if priority:
+                        locator_attrs = priority[:5]  # Top 5 定位器属性
+            except Exception:
+                pass
+
         try:
             with _recording_lock:
                 if not _active_browser_staging:
@@ -437,7 +339,7 @@ async def start_recording(
 
                 current_url = page.url
 
-                session = pipeline.record(page)
+                session = pipeline.record(page, locator_attrs=locator_attrs)
 
                 # 10 分钟超时保护
                 def _auto_stop():
@@ -597,11 +499,53 @@ async def generate_test_code(
     data = json.loads(input_path.read_text("utf-8"))
     recording = RawRecording.from_dict(data)
 
+    # 大规模录制保护：超过阈值时返回提示而非直接超时
+    LARGE_RECORDING_THRESHOLD = 200
+    actionable_steps = [s for s in recording.steps if s.action.value not in ("mutation",)]
+    if len(actionable_steps) > LARGE_RECORDING_THRESHOLD:
+        return json.dumps({
+            "warning": f"录制包含 {len(actionable_steps)} 个有效步骤（共 {len(recording.steps)} 个事件），"
+                       f"MCP 模式下可能超时。",
+            "suggestion": "建议使用 CLI 生成：uibridge generate -i recording.json -o generated/",
+            "step_count": len(actionable_steps),
+            "total_events": len(recording.steps),
+            "estimated_scenes": len(actionable_steps) // 50 + 1,
+        }, indent=2, ensure_ascii=False)
+
     pipeline = _build_pipeline(adapter_config)
 
     semantic = pipeline.analyze(recording)
     call_seq = pipeline.map_to_framework(semantic)
     results = pipeline.generate_and_verify(call_seq, recording)
+
+    # 自动模式挖掘：每次生成后从语义序列中挖掘可复用的 BAW 模式，写入 KB
+    pattern_count = 0
+    if pipeline.kb_manager:
+        try:
+            patterns = pipeline.mine_baw_patterns(semantic)
+            from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+            for p in patterns:
+                key = f"pattern.{p.get('baw_name', 'auto').lower()}"
+                existing = pipeline.kb_manager.store.get_by_key("patterns", key)
+                if existing:
+                    existing.value["frequency"] = existing.value.get("frequency", 0) + p.get("frequency", 0)
+                    existing.version += 1
+                    pipeline.kb_manager.store.save(existing)
+                else:
+                    item = KBItem(
+                        id=f"auto_pattern_{key}",
+                        category="patterns",
+                        key=key,
+                        value={"actions": p.get("actions", []), "frequency": p.get("frequency", 0),
+                               "suggestion": p.get("suggestion", "")},
+                        confidence=Confidence(score=0.55, source=KnowledgeSource.PATTERN_MINING),
+                        description=p.get("pattern", ""),
+                        tags=["auto-mined", "pattern"],
+                    )
+                    pipeline.kb_manager.store.save(item)
+                    pattern_count += 1
+        except Exception:
+            pass
 
     out_dir = _sanitize_output_path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -624,6 +568,9 @@ async def generate_test_code(
             "code_preview": r["code"][:500],
             "fix_suggestion": r["verify"].fix_suggestion if r["verify"].status != "passed" else None,
         })
+
+    if pattern_count > 0:
+        output.append({"pattern_mining": f"发现 {pattern_count} 个新模式，已写入 KB"})
 
     return json.dumps(output, indent=2, ensure_ascii=False)
 
@@ -678,13 +625,24 @@ async def seed_knowledge_base(
     from uibridge.kb.kb_manager import KBManager
 
     km = KBManager(project_dir)
-    source_dirs = _detect_source_dirs(project_dir)
+    items = km.auto_seed()
+    if not items:
+        # KB 已有足够条目，返回当前状态
+        existing = km.store.list_all()
+        categories = {}
+        for item in existing:
+            categories[item.category] = categories.get(item.category, 0) + 1
+        return json.dumps({
+            "status": "ok",
+            "message": "KB 已有足够条目，跳过自动播种",
+            "total_items": len(existing),
+            "by_category": categories,
+            "kb_dir": str(Path(project_dir) / ".uibridge" / "kb"),
+        }, indent=2, ensure_ascii=False)
 
-    items = km.seed_from_static_analysis(source_dirs)
     categories = {}
     for item in items:
-        cat = item.category
-        categories[cat] = categories.get(cat, 0) + 1
+        categories[item.category] = categories.get(item.category, 0) + 1
 
     return json.dumps({
         "status": "ok",
@@ -713,6 +671,35 @@ async def query_knowledge_base(
     km = KBManager(project_dir)
     result = km.query_nl(query)
     return result
+
+
+@mcp.tool()
+async def update_knowledge_base(
+    instruction: str,
+    project_dir: str = ".",
+) -> str:
+    """通过自然语言指令操作知识库：查询、新增、修改、删除条目。
+
+    用于：用户通过 Agent 对话来管理 KB，Agent 将此工具暴露给用户。
+    支持 4 种意图：
+    - QUERY: "表格组件的定位方式是什么？"
+    - ADD:   "新增规则：弹窗用 role='dialog' 识别"
+    - MODIFY:"把表格组件的定位方式改为 data-testid"
+    - DELETE:"删掉表格排序的规则"
+
+    KB 文件存储在 project_dir/.uibridge/kb/ 下，可 commit 到版本控制。
+
+    参数：
+    - instruction: 自然语言指令（中文/英文）
+    - project_dir: 项目根目录路径
+    返回：操作结果。
+    """
+    import json
+    from uibridge.kb.kb_manager import KBManager
+
+    km = KBManager(project_dir)
+    result = km.operate_nl(instruction)
+    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 # ── 入口 ──────────────────────────────────────────────────

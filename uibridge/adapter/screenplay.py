@@ -289,13 +289,36 @@ class ScreenplayCodeGenerator(CodeGenerator):
         if kind and kind.value == "assert" and step.calls:
             msg = step.calls[0].args[0] if step.calls[0].args else step.comment
             if msg:
-                return f"# assert: {msg}"
+                return self._render_assertion(msg)
             return "actor.should(See.that(PAGE, Is.visible()))"
 
         comment = getattr(step, 'comment', '')
         if comment:
             return f"# {comment}"
         return ""
+
+    def _render_assertion(self, candidate: str) -> str:
+        from uibridge.adapter.base import parse_assertion_candidate
+        p = parse_assertion_candidate(candidate)
+        atype = p.get("type", "unknown")
+        if atype == "url_equals":
+            return f'actor.should(See.that(ThePage.url(), Is.equalTo("{p["url"]}")))'
+        elif atype == "element_visible":
+            return f'actor.should(See.that(Element.named("{p["element"]}"), Is.visible()))'
+        elif atype == "element_absent":
+            return f'actor.should(See.that(Element.named("{p["element"]}"), Is.notVisible()))'
+        elif atype == "text_equals":
+            return f'actor.should(See.that(Element.named("{p["element"]}"), Has.text("{p["text"]}")))'
+        elif atype == "count_changed":
+            direction = "more" if p["direction"] == "increased" else "fewer"
+            return f'# {p["role"]} count should be {direction}'
+        elif atype == "layout_stable":
+            return f'# assert layout of \'{p["element"]}\' is stable'
+        elif atype == "generic":
+            msg = p.get("message", candidate)
+            return f'# verify: {msg}'
+        else:
+            return f'# TODO: assert {candidate}'
 
     def _render_target_class(self, comp_def: ComponentDef) -> str:
         template = _JINJA_ENV.from_string(SCREENPLAY_TARGET_TEMPLATE)

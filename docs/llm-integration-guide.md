@@ -23,7 +23,7 @@
               (JSON-RPC)        (FastMCP, 常驻进程)
 ```
 
-MCP Server 启动后保持常驻，暴露 9 个类型化工具。Agent 通过标准 MCP 协议调用。
+MCP Server 启动后保持常驻，暴露 10 个类型化工具。Agent 通过标准 MCP 协议调用。
 
 ### 配置（.mcp.json）
 
@@ -53,6 +53,7 @@ MCP Server 启动后保持常驻，暴露 9 个类型化工具。Agent 通过标
 | `diff_snapshots` | `input_file?` | 断言候选列表 |
 | `seed_knowledge_base` | `project_dir` | KB 播种摘要 |
 | `query_knowledge_base` | `query`, `project_dir?` | KB 查询结果 |
+| `update_knowledge_base` | `instruction`, `project_dir?` | NL 对话式 KB 增删改查 |
 | `check_environment` | (无) | 浏览器等运行环境状态 |
 
 ### Agent 工作流（三段式录制）

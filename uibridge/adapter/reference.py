@@ -522,13 +522,36 @@ class ReferenceCodeGenerator(CodeGenerator):
             call = step.calls[0]
             msg = call.args[0] if call.args else step.comment
             if msg:
-                return f'assert True, f"TODO: assert {msg}"'
+                return self._render_assertion(msg)
             return 'assert True, "TODO: assert page state changed as expected"'
 
         comment = getattr(step, 'comment', '')
         if comment:
             return f"# {comment}"
         return ""
+
+    def _render_assertion(self, candidate: str) -> str:
+        from uibridge.adapter.base import parse_assertion_candidate
+        p = parse_assertion_candidate(candidate)
+        atype = p.get("type", "unknown")
+        if atype == "url_equals":
+            return f'assert page.url == "{p["url"]}", "URL mismatch"'
+        elif atype == "element_visible":
+            return f'assert page.locator("[data-module=\'{p["element"]}\']").is_visible(), "{p["element"]} should be visible"'
+        elif atype == "element_absent":
+            return f'assert page.locator("[data-module=\'{p["element"]}\']").count() == 0, "{p["element"]} should be absent"'
+        elif atype == "text_equals":
+            return f'assert page.locator("[data-module=\'{p["element"]}\']").text_content() == "{p["text"]}", "{p["element"]} text mismatch"'
+        elif atype == "count_changed":
+            direction = "more" if p["direction"] == "increased" else "fewer"
+            return f'# {p["role"]} count should be {direction}'
+        elif atype == "layout_stable":
+            return f'# assert layout of \'{p["element"]}\' is stable'
+        elif atype == "generic":
+            msg = p.get("message", candidate)
+            return f'# verify: {msg}'
+        else:
+            return f'assert True, f"TODO: assert {candidate}"'
 
 
 # ═══════════════════════════════════════════════════════════════

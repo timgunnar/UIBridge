@@ -1,6 +1,6 @@
 # Adapter 开发指南 — AI Agent 自主开发适配器的完整流程
 
-当 4 组预置适配器都不匹配企业自研框架时，Agent 遵循本指南：分析项目 → 映射接口 → 生成代码。
+当 5 组预置适配器都不匹配企业自研框架时，Agent 遵循本指南：分析项目 → 映射接口 → 生成代码。
 
 ## 适配器是什么
 
@@ -292,6 +292,7 @@ Agent 可以读取以下文件了解每个接口的具体实现方式：
 | `uibridge/adapter/screenplay.py` | Python + Screenplay | 抽象组件类型 (Target)、Actor 模式 |
 | `uibridge/adapter/java_testng.py` | Java + Page Object | Java 代码生成、TestNG 注解、组件类 |
 | `uibridge/adapter/java_fluent.py` | Java + Fluent | 链式调用、Builder 模式、AssertJ |
+| `uibridge/adapter/custom_playwright_java.py` | Java + Playwright | Playwright API、AssertJ |
 
 ## 接口定义
 
@@ -324,7 +325,7 @@ DataFormatter:      format / get_data_ref_style
 
 ```mermaid
 flowchart TD
-    A["分析企业框架"] --> B{"与 4 组预置<br/>适配器相似 > 80%?"}
+    A["分析企业框架"] --> B{"与 5 组预置<br/>适配器相似 > 80%?"}
     B -->|"是"| C["直接用预置适配器<br/>改 adapter.yaml 即可"]
     B -->|"否"| D{"有独特命名/import<br/>但组件→操作结构不变?"}
     D -->|"是"| E["不改核心<br/>seed_KB + StyleLearner"]

@@ -320,19 +320,87 @@ RECORDER_JS = r"""
     document.addEventListener('turbolinks:visit', _report_url_change, true);
     document.addEventListener('turbo:visit', _report_url_change, true);
 
-    // ── MutationObserver：动态内容变化 ─────────
+    // ── MutationObserver：动态内容变化（去抖合并） ─────────
+    let _mut_pending = null;        // {added, removed, attrChanged, url}
+    let _mut_timer = null;
+    let _mut_first_ts = 0;
+    const MUT_DEBOUNCE_MS = 500;    // 去抖窗口
+    const MUT_MAX_HOLD_MS = 2000;   // 最长持有（防止持续动画/轮询导致不刷新）
+
+    function _flush_mutations() {
+        if (_mut_timer) { clearTimeout(_mut_timer); _mut_timer = null; }
+        if (_mut_pending && (_mut_pending.added > 0 || _mut_pending.removed > 0 || _mut_pending.attrChanged > 0)) {
+            window.__uibridge_report('mutation', JSON.stringify(_mut_pending));
+        }
+        _mut_pending = null;
+        _mut_first_ts = 0;
+    }
+
+    function _schedule_mutation_flush() {
+        if (_mut_timer) clearTimeout(_mut_timer);
+        _mut_timer = setTimeout(_flush_mutations, MUT_DEBOUNCE_MS);
+    }
+
+    // KB 驱动噪声过滤：检查元素是否含有白名单属性（向上查 5 层）
+    function _has_locator_attr(el) {
+        let node = el;
+        const attrs = window.__uibridge_locator_attrs;
+        for (let i = 0; i < 5 && node && node !== document.body; i++) {
+            if (node.getAttribute && attrs) {
+                for (const attr of attrs) {
+                    if (node.hasAttribute(attr)) return true;
+                }
+            }
+            node = node.parentElement;
+        }
+        return false;
+    }
+
+    // 检查一批 mutation 中是否至少有一个受影响元素含有定位器属性
+    function _mutation_batch_has_locator(mutations) {
+        const attrs = window.__uibridge_locator_attrs;
+        if (!attrs || attrs.length === 0) return true; // 无白名单 → 不过滤
+        for (const m of mutations) {
+            if (m.type === 'attributes') {
+                if (m.target && m.target.nodeType === 1 && _has_locator_attr(m.target)) return true;
+            } else {
+                for (const node of m.addedNodes) {
+                    if (node.nodeType === 1 && _has_locator_attr(node)) return true;
+                }
+                for (const node of m.removedNodes) {
+                    if (node.nodeType === 1 && _has_locator_attr(node)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     const _mo = new MutationObserver((mutations) => {
+        // 噪声过滤：检查整批 mutation 是否至少命中一个白名单元素
+        if (!_mutation_batch_has_locator(mutations)) return;
         let added = 0, removed = 0, attr_changed = 0;
         for (const m of mutations) {
             added += m.addedNodes.length;
             removed += m.removedNodes.length;
             if (m.type === 'attributes') attr_changed++;
         }
-        if (added > 0 || removed > 0 || attr_changed > 0) {
-            const summary = {added, removed, attrChanged: attr_changed, url: location.href};
-            window.__uibridge_report('mutation', JSON.stringify(summary));
+        if (added === 0 && removed === 0 && attr_changed === 0) return;
+        if (!_mut_pending) {
+            _mut_pending = {added: 0, removed: 0, attrChanged: 0, url: location.href};
+            _mut_first_ts = Date.now();
+        }
+        _mut_pending.added += added;
+        _mut_pending.removed += removed;
+        _mut_pending.attrChanged += attr_changed;
+        _mut_pending.url = location.href;
+        // 超长持有保护
+        if (Date.now() - _mut_first_ts > MUT_MAX_HOLD_MS) {
+            _flush_mutations();
+        } else {
+            _schedule_mutation_flush();
         }
     });
+
     // 优先观察 documentElement（始终存在），body 异步就绪后再追加
     function _start_observing() {
         const target = document.body || document.documentElement;
@@ -355,6 +423,9 @@ RECORDER_JS = r"""
         }
     }
     _start_observing();
+
+    // 暴露 flush 函数供 Python 端在 stop 时调用
+    window.__uibridge_flush_mutations = _flush_mutations;
 
     // ── Shadow DOM 辅助：遍历所有 shadow root 执行查询 ──
     function _query_all_deep(root, selector) {
@@ -404,7 +475,7 @@ class RecordingSession:
     SPA 导航通过 console.log 桥接 → page.on("console") 在安全线程捕获。
     """
 
-    def __init__(self, page: Page, enable_runtime: bool = True):
+    def __init__(self, page: Page, enable_runtime: bool = True, locator_attrs: list[str] | None = None):
         self.page = page
         self.steps: list[RawStep] = []
         self.snapshots: dict[str, Snapshot] = {}
@@ -414,6 +485,7 @@ class RecordingSession:
         self._active = True
         self._lock = threading.Lock()
         self._spa_nav_pending = False
+        self.locator_attrs = locator_attrs  # KB 驱动噪声过滤：定位器属性白名单
         # 在初始化时（安全线程）捕获当前 URL，避免后续在 transport 线程访问 page.url
         self._current_url = page.url
         self.runtime: RuntimeAnalyzer | None = None
@@ -443,6 +515,15 @@ class RecordingSession:
         except Exception:
             pass
 
+        # KB 驱动噪声过滤：将定位器属性白名单注入浏览器
+        if self.locator_attrs:
+            try:
+                self.page.evaluate(
+                    "window.__uibridge_locator_attrs = " + json.dumps(self.locator_attrs)
+                )
+            except Exception:
+                pass
+
         # 刷新排队中的 expose_binding 回调（sync_playwright 调度器只在 API 调用时处理回调）
         try:
             self.page.wait_for_timeout(100)
@@ -467,6 +548,14 @@ class RecordingSession:
             return
 
         self._event_count += 1
+
+        # 大规模录制警告：每 100 条事件输出提示
+        if self._event_count % 100 == 0:
+            logger.warning(
+                "录制事件已达 %s 条。大规模录制可能导致生成耗时较长，"
+                "建议拆分录制为多个较短的操作序列。",
+                self._event_count
+            )
 
         snap_id = self._last_snapshot_id()
 
@@ -889,6 +978,13 @@ class RecordingSession:
 
     def stop(self) -> "RawRecording":
         """程序化停止录制，返回 RawRecording。同时停止运行时分析器。"""
+        # 刷新 JS 端待处理的 mutation（去抖窗口内的数据）
+        # 必须在设置 _active = False 之前，否则 _handle_js_event 会拒绝事件
+        try:
+            self.page.evaluate("window.__uibridge_flush_mutations && window.__uibridge_flush_mutations()")
+            self.page.wait_for_timeout(300)
+        except Exception:
+            pass
         with self._lock:
             self._active = False
         if self.runtime:

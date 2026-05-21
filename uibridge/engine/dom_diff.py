@@ -304,13 +304,13 @@ class DOMDiffer:
             elif entry.type == "position_changed":
                 candidates.append(f"assert layout of '{entry.element_name}' is stable")
 
-        # 补充启发式断言
+        # 补充启发式断言 — 使用标准格式以匹配 parse_assertion_candidate 的 6 种模式
         if "button" in snapshot.lower():
-            candidates.append("assert submit/confirm button is visible")
+            candidates.append("assert element 'action_button' (button) is visible")
         if any(t in snapshot.lower() for t in ("table", "grid", "list")):
-            candidates.append("assert result list/table is visible")
+            candidates.append("assert element 'result_list' (table) is visible")
         if "link" in snapshot.lower():
-            candidates.append("assert navigation links are visible")
+            candidates.append("assert element 'navigation_links' (link) is visible")
 
         return candidates
 

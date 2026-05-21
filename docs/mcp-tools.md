@@ -1,6 +1,6 @@
 # MCP 工具参考
 
-uibridge 通过 MCP Server 暴露 9 个工具，供 AI Agent（Claude Code 等）调用。所有工具均为异步，Agent 按需组合调用。
+uibridge 通过 MCP Server 暴露 10 个工具，供 AI Agent（Claude Code 等）调用。所有工具均为异步，Agent 按需组合调用。
 
 ## 工具总览
 
@@ -15,6 +15,7 @@ uibridge 通过 MCP Server 暴露 9 个工具，供 AI Agent（Claude Code 等�
 | 7 | `diff_snapshots` | 对比页面快照差异 | 生成断言候选 |
 | 8 | `seed_knowledge_base` | 扫描源码播种 KB | 首次接入新项目 |
 | 9 | `query_knowledge_base` | 查询框架约定 | 了解项目组件和定位策略 |
+| 10 | `update_knowledge_base` | NL 对话式 KB 管理 | 通过对话增删改查 KB |
 
 ---
 
@@ -283,6 +284,65 @@ generated/
 
 ---
 
+## 10. update_knowledge_base
+
+**用途**：NL 对话式知识库增删改查。Agent 根据用户自然语言指令，自动识别意图（新增/修改/删除/查询），并更新或检索知识库条目。
+
+**参数**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `instruction` | string | 是 | 自然语言指令（如"定位器用 data-testid"、"删掉表格排序规则"） |
+| `project_dir` | string | 否 | 项目根目录路径，默认当前目录 |
+
+**返回**：操作结果摘要，包含意图类型、匹配条目、更新内容。
+
+**返回示例**：
+```json
+{
+  "status": "ok",
+  "intent": "MODIFY",
+  "matched_items": 1,
+  "changes": [
+    {
+      "item_id": "locator-strategy",
+      "action": "updated",
+      "detail": "定位器优先级: data-testid → id → xpath"
+    }
+  ]
+}
+```
+
+**使用时机**：用户通过对话修正框架约定、补充项目知识、或删除过时规则时。Agent 将用户的自然语言指令转换为对 `.uibridge/kb/` 目录下知识条目文件的增删改操作。
+
+**意图识别**：
+
+| 意图 | 触发词示例 | 操作 | 示例指令 |
+|------|-----------|------|---------|
+| ADD | "添加"、"新增"、"增加"、"录入" | 创建新 KB 条目 | "添加约定：所有按钮用 `data-testid` 定位" |
+| MODIFY | "修改"、"改成"、"换成"、"调整"、"原来" | 更新已有 KB 条目 | "定位策略改成 data-testid 优先" |
+| DELETE | "删除"、"去掉"、"移除"、"不要" | 删除匹配的 KB 条目 | "删掉表格排序规则" |
+| QUERY | "查询"、"搜索"、"看看"、"有没有"、"列出" | 检索 KB 条目（同 `query_knowledge_base`） | "查询项目中 TableAW 的使用约定" |
+
+**典型工作流**：
+
+```
+用户: "这个项目定位器应该用 data-testid"
+Agent: update_knowledge_base(instruction="定位器使用 data-testid")
+Agent: "已将定位器策略更新为 data-testid 优先。"
+       "影响范围：1 条 locator-strategy 条目。"
+
+用户: "删掉表格排序的规则，我们不用那个"
+Agent: update_knowledge_base(instruction="删掉表格排序规则")
+Agent: "已删除 'table-sort' 条目。"
+
+用户: "看看知识库里有什么"
+Agent: update_knowledge_base(instruction="列出所有知识库条目")
+Agent: "当前 KB 共 23 条：组件 15、约定 5、页面 3。"
+```
+
+---
+
 ## Agent 典型工作流
 
 ### 录制新测试
@@ -313,6 +373,15 @@ generated/
 ```
 1. analyze_page(url="...")                      ← 了解页面结构
 2. query_knowledge_base("TableAW")              ← 了解框架组件
+```
+
+### KB 维护
+
+```
+1. update_knowledge_base("定位器用 data-testid")  ← 通过对话修正定位约定
+2. update_knowledge_base("删掉过时的组件规则")      ← 删除无用条目
+3. update_knowledge_base("添加新组件 DateTimePicker AW") ← 补充新框架知识
+4. query_knowledge_base("定位器约定")              ← 验证更新结果
 ```
 
 ---

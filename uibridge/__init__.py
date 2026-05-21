@@ -1,5 +1,5 @@
 """uibridge — UI自动化测试脚本智能化自动生成系统"""
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 
 def check_browser_available(browser_name: str = "chromium") -> tuple[bool, str]:

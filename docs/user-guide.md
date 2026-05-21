@@ -137,7 +137,7 @@ KB 扫描发现: package com.enterprise, 组件 WebButton
 
 ## 第四章：自定义适配器
 
-如果你的框架不匹配 4 组预置适配器（如 JUnit 5 + Selenide），AI Agent 自主完成适配器开发：
+如果你的框架不匹配 5 组预置适配器（如 JUnit 5 + Selenide），AI Agent 自主完成适配器开发：
 
 ```
 你：我的项目是 JUnit 5 + Selenide
@@ -163,6 +163,7 @@ Agent：了解。读取 ADAPTER_GUIDE.md → 分析 pom.xml → 学习 pages/*.j
 | `diff_snapshots` | 对比页面变化 |
 | `seed_knowledge_base` | 扫描源码播种 KB |
 | `query_knowledge_base` | 查询框架约定 |
+| `update_knowledge_base` | NL 对话式知识库增删改查 |
 | `check_environment` | 检查 uibridge 运行环境 |
 
 ### CLI 命令（MCP 不可用时）
@@ -221,6 +222,7 @@ pip show uibridge                  # 应报 "not found"
 | `screenplay` | Python | pytest | Screenplay Pattern |
 | `java_testng` | Java | TestNG + Maven | Page Object + WebDriver |
 | `java_fluent` | Java | TestNG + Maven | Fluent API + PageFactory + AssertJ |
+| `custom_playwright_java` | Java | TestNG + Maven | Playwright + Page Object + AssertJ |
 
 ---
 

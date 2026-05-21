@@ -10,6 +10,7 @@ from playwright.sync_api import sync_playwright
 
 from .pipeline import Pipeline
 from .adapter.loader import load_adapter
+from .kb.kb_manager import KBManager
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.3.1")
+@click.version_option(version="0.3.2")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 
@@ -39,7 +40,7 @@ def record(url: str, output: str, headed: bool, adapter_config: str):
         page = context.new_page()
         page.goto(url)
 
-        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt)
+        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt, project_root=".", kb_manager=KBManager("."))
         session = pipeline.record(page)
 
         click.echo("=" * 60)
@@ -124,7 +125,7 @@ def analyze(url: str, adapter_config: str):
         page.goto(url)
         page.wait_for_load_state("networkidle")
 
-        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt)
+        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt, project_root=".", kb_manager=KBManager("."))
         components = pipeline.discover_components(page)
 
         click.echo(f"\n页面: {url}")

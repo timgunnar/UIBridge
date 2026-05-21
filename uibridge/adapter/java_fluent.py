@@ -365,13 +365,36 @@ class FluentCodeGenerator(CodeGenerator):
         if kind and kind.value == "assert" and step.calls:
             msg = step.calls[0].args[0] if step.calls[0].args else step.comment
             if msg:
-                return f"// assert: {msg}";
+                return self._render_assertion(msg)
             return "assertThat(page).isNotNull();"
 
         comment = getattr(step, 'comment', '')
         if comment:
             return f"// {comment}"
         return ""
+
+    def _render_assertion(self, candidate: str) -> str:
+        from uibridge.adapter.base import parse_assertion_candidate
+        p = parse_assertion_candidate(candidate)
+        atype = p.get("type", "unknown")
+        if atype == "url_equals":
+            return f'assertThat(page.getCurrentUrl()).isEqualTo("{p["url"]}");'
+        elif atype == "element_visible":
+            return f'assertThat(page.find("[data-module=\'{p["element"]}\']")).isVisible();'
+        elif atype == "element_absent":
+            return f'assertThat(page.find("[data-module=\'{p["element"]}\']")).isHidden();'
+        elif atype == "text_equals":
+            return f'assertThat(page.find("[data-module=\'{p["element"]}\']")).hasText("{p["text"]}");'
+        elif atype == "count_changed":
+            direction = "greaterThan" if p["direction"] == "increased" else "lessThan"
+            return f'// {p["role"]} count should be {p["direction"]}'
+        elif atype == "layout_stable":
+            return f'// assert layout of \'{p["element"]}\' is stable'
+        elif atype == "generic":
+            msg = p.get("message", candidate)
+            return f'// verify: {msg}'
+        else:
+            return f'assertThat(page).isNotNull(); // TODO: assert {candidate}'
 
 
 class FluentDataFormatter(DataFormatter):

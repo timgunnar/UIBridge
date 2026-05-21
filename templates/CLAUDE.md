@@ -27,7 +27,7 @@
 }
 ```
 
-注册后 Agent 自动获得 9 个类型化工具：
+注册后 Agent 自动获得 10 个类型化工具：
 
 | MCP 工具 | 参数 | 用途 |
 |---------|------|------|
@@ -39,6 +39,7 @@
 | `diff_snapshots` | `input_file?` | 对比快照，生成断言候选 |
 | `seed_knowledge_base` | `project_dir` | 扫描源码播种 KB |
 | `query_knowledge_base` | `query`, `project_dir?` | 查询框架约定 |
+| `update_knowledge_base` | `instruction`, `project_dir?` | NL 对话式知识库增删改查 |
 | `check_environment` | (无) | 检查 Playwright 浏览器等运行环境 |
 
 ### 方式 B: CLI 命令（兜底）
@@ -67,7 +68,7 @@
 
 1. 确保 `pip install -e .` 已在 uibridge 目录执行
 2. 检查 `.uibridge/adapter.yaml` 存在（没有则从 uibridge 的 `templates/adapter.yaml` 复制并调整 `base_package`）
-3. 调用 `seed_knowledge_base(project_dir=".")` 扫描源码播种 KB
+3. KB 会在首次使用 `analyze_page` / `generate_test_code` 时自动播种（无需手动调用）。如需显式触发：`seed_knowledge_base(project_dir=".")`
 4. 报告发现了多少组件、页面、约定
 
 ### 录制新功能测试（三段式）
@@ -103,7 +104,7 @@
 ```
 企业框架分析结果
     │
-    ├─ 与 4 组 demo 相似 >80%？
+    ├─ 与 5 组 demo 相似 >80%？
     │   → 直接用预置适配器。修改 adapter.yaml 即可，无需写代码。
     │
     ├─ 有独特命名/import/目录约定，但"组件→定位→操作→断言"结构不变？

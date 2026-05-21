@@ -190,6 +190,45 @@ class AssertionStyle:
     type: str = "pytest_assert"  # pytest_assert / self_assert / expect
 
 
+# ── 断言候选解析：字符串 → 结构化数据 → 可执行代码 ──────────
+
+ASSERT_PATTERNS = [
+    (r"assert page\.url == \"(.+?)\"", "url_equals"),
+    (r"assert element '([^']+)' \((\w+)\) is visible", "element_visible"),
+    (r"assert element '([^']+)' \((\w+)\) is absent", "element_absent"),
+    (r"assert text of '([^']+)' == \"(.+?)\"", "text_equals"),
+    (r"assert count of (\w+) elements (increased|decreased)", "count_changed"),
+    (r"assert layout of '([^']+)' is stable", "layout_stable"),
+]
+
+
+def parse_assertion_candidate(candidate: str) -> dict:
+    """将断言候选字符串解析为结构化数据，供适配器生成可执行代码。"""
+    for pattern, atype in ASSERT_PATTERNS:
+        m = re.match(pattern, candidate)
+        if m:
+            result = {"type": atype}
+            if atype == "url_equals":
+                result["url"] = m.group(1)
+            elif atype in ("element_visible", "element_absent"):
+                result["element"] = m.group(1)
+                result["role"] = m.group(2)
+            elif atype == "text_equals":
+                result["element"] = m.group(1)
+                result["text"] = m.group(2)
+            elif atype == "count_changed":
+                result["role"] = m.group(1)
+                result["direction"] = m.group(2)
+            elif atype == "layout_stable":
+                result["element"] = m.group(1)
+            return result
+    # 通用匹配
+    m = re.match(r"assert (.+)", candidate)
+    if m:
+        return {"type": "generic", "message": m.group(1)}
+    return {"type": "unknown", "raw": candidate}
+
+
 @dataclass
 class ElementInfo:
     tag: str = ""
@@ -275,6 +314,60 @@ class ActionRecognizer(ABC):
     @abstractmethod
     def aggregate(self, raw_steps: list, page_context: dict) -> list:
         ...
+
+    def _match_kb_patterns(self, actions: list, kb_manager=None) -> list:
+        """Match action sequences against KB patterns, merge recognized sub-sequences."""
+        if not kb_manager or len(actions) < 2:
+            return actions
+
+        try:
+            patterns = kb_manager.store.list_category("patterns")
+        except Exception:
+            return actions
+        if not patterns:
+            return actions
+
+        # Build action name sequence for matching
+        action_names = []
+        for a in actions:
+            name = a.get("action", "") if isinstance(a, dict) else str(a)
+            action_names.append(name)
+
+        # Check each KB pattern against the action sequence
+        merged = list(actions)
+        for pattern_item in patterns:
+            pattern_actions = pattern_item.value.get("actions") or pattern_item.value.get("steps", [])
+            if not pattern_actions or len(pattern_actions) < 2:
+                continue
+
+            # Simple subsequence match: find pattern_actions in action_names
+            for i in range(len(action_names) - len(pattern_actions) + 1):
+                match = True
+                for j, pa in enumerate(pattern_actions):
+                    if pa.lower() not in action_names[i + j].lower():
+                        match = False
+                        break
+                if match:
+                    # Merge the matching subsequence
+                    pattern_name = pattern_item.key
+                    # Strip "pattern." prefix if present
+                    if pattern_name.startswith("pattern."):
+                        pattern_name = pattern_name[len("pattern."):]
+                    merged_step = {
+                        "raw_steps": [],
+                        "component": merged[i].get("component", "page") if isinstance(merged[i], dict) else "page",
+                        "type": "kb_pattern",
+                        "action": pattern_name,
+                        "sub_actions": merged[i:i + len(pattern_actions)],
+                    }
+                    # Collect raw_steps from all merged items
+                    for item in merged[i:i + len(pattern_actions)]:
+                        if isinstance(item, dict) and "raw_steps" in item:
+                            merged_step["raw_steps"].extend(item["raw_steps"])
+                    merged = merged[:i] + [merged_step] + merged[i + len(pattern_actions):]
+                    break
+
+        return merged
 
     def recognize_pattern(self, sequences: list) -> list[dict]:
         """PrefixSpan 频繁子序列挖掘 — 发现可封装的 BAW 模式。

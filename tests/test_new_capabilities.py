@@ -1015,6 +1015,136 @@ class TestKBStoreSearch:
         assert any("ButtonAW" in r.key for r in results)
 
 
+class TestKBNLOperations:
+    """KBManager.operate_nl() NL CRUD 操作测试"""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        import tempfile
+        self.tmpdir = tempfile.TemporaryDirectory()
+        from uibridge.kb.kb_manager import KBManager
+        self.km = KBManager(str(self.tmpdir.name))
+        # 预播种一些条目，供 MODIFY/DELETE 使用
+        self.km.inject(
+            category="conventions", key="locator_priority",
+            value={"priority": ["id", "xpath"]},
+            description="默认定位器优先级: id > xpath",
+        )
+        self.km.inject(
+            category="components", key="table_aw",
+            value={"class_name": "TableAW", "xpath_pattern": "//table"},
+            description="表格组件: TableAW, XPath 用 class 定位",
+        )
+        self.km.inject(
+            category="patterns", key="login_flow",
+            value={"steps": ["enter_username", "enter_password", "click_login"]},
+            description="登录流程: 输入用户名 → 密码 → 点击登录",
+        )
+
+    def teardown_method(self):
+        self.tmpdir.cleanup()
+
+    # ── QUERY ──
+
+    def test_nl_query_finds_result(self):
+        """NL 查询: 匹配到 KB 条目"""
+        result = self.km.operate_nl("定位器优先级是什么？")
+        assert result["status"] == "ok"
+        assert result["intent"] == "QUERY"
+        assert "locator" in result["result"].lower()
+
+    def test_nl_query_no_result(self):
+        """NL 查询: 无匹配内容"""
+        result = self.km.operate_nl("有没有关于颜色的规则？")
+        assert result["status"] == "ok"
+        assert "No KB entries found" in result["result"]
+
+    def test_nl_query_implicit(self):
+        """NL 查询: 无明确意图默认为 QUERY"""
+        result = self.km.operate_nl("表格组件")
+        assert result["intent"] == "QUERY"
+
+    # ── ADD ──
+
+    def test_nl_add_new_rule(self):
+        """NL 新增: 添加一条新规则"""
+        result = self.km.operate_nl("新增规则：弹窗用 role='dialog' 识别")
+        assert result["status"] == "ok"
+        assert result["intent"] == "ADD"
+        assert "dialog" in result["added"]["description"]
+
+        # 验证条目已持久化（弹窗 → components 分类）
+        items = self.km.store.list_category("components")
+        assert any("dialog" in item.description for item in items)
+
+    def test_nl_add_infers_category(self):
+        """NL 新增: 根据内容关键词推断分类"""
+        result = self.km.operate_nl("添加表格组件的高亮功能")
+        assert result["status"] == "ok"
+        assert result["intent"] == "ADD"
+        # "表格"关键词 → components 分类
+        assert result["added"]["category"] == "components"
+
+    # ── MODIFY ──
+
+    def test_nl_modify_existing(self):
+        """NL 修改: 更新已有条目"""
+        result = self.km.operate_nl("表格组件的定位方式改为 data-testid")
+        assert result["status"] == "ok"
+        assert result["intent"] == "MODIFY"
+        assert "table_aw" in result["modified"]["key"]
+
+        # 验证已更新
+        item = self.km.store.get_by_key("components", "table_aw")
+        assert item is not None
+        assert "nl_modification" in item.value
+        assert "data-testid" in item.value["nl_modification"]
+
+    def test_nl_modify_not_found(self):
+        """NL 修改: 目标不存在时返回提示"""
+        result = self.km.operate_nl("把不存在的规则改成 xxx")
+        assert result["status"] == "not_found"
+        assert result.get("suggest_add") is True
+
+    def test_nl_modify_with_should_pattern(self):
+        """NL 修改: '应该用xxx' 模式"""
+        result = self.km.operate_nl("定位器应该用 data-module")
+        assert result["status"] == "ok"
+        assert result["intent"] == "MODIFY"
+
+    # ── DELETE ──
+
+    def test_nl_delete_existing(self):
+        """NL 删除: 删除已有条目（归档）"""
+        result = self.km.operate_nl("删掉登录流程的规则")
+        assert result["status"] == "ok"
+        assert result["intent"] == "DELETE"
+        assert "login" in result["deleted"]["key"].lower()
+
+        # 验证已归档（list_category 不返回归档项）
+        items = self.km.store.list_category("patterns")
+        assert not any("login" in item.key for item in items)
+
+    def test_nl_delete_not_found(self):
+        """NL 删除: 目标不存在时返回提示"""
+        result = self.km.operate_nl("删除不存在的规则")
+        assert result["status"] == "not_found"
+        assert result["intent"] == "DELETE"
+
+    # ── Edge cases ──
+
+    def test_nl_empty_instruction(self):
+        """空指令处理"""
+        result = self.km.operate_nl("")
+        assert result["status"] in ("ok", "error")
+
+    def test_nl_add_with_special_chars(self):
+        """NL 新增: 特殊字符处理"""
+        result = self.km.operate_nl("新增: 表单校验规则 @NotNull @Size(min=1)")
+        assert result["status"] == "ok"
+        assert result["intent"] == "ADD"
+
+
 # ═══════════════════════════════════════════════════════════════
 # Screenplay / JavaFluent — 扩展 ARIA 角色映射
 # ═══════════════════════════════════════════════════════════════
@@ -1120,3 +1250,275 @@ class TestJavaFluentARIAExpanded:
             assert len(methods) > 0, f"{expected_type} should have methods for role={role}"
             assert all(hasattr(m, "name") for m in methods), \
                 f"All methods for {expected_type} should have 'name'"
+
+
+# ═══════════════════════════════════════════════════════════════
+# KB Pattern Matching — Stage 3 noise filtering
+# ═══════════════════════════════════════════════════════════════
+
+class TestKBPatternMatching:
+    """KB pattern matching in ActionRecognizer._match_kb_patterns() tests"""
+
+    @staticmethod
+    def _make_mock_kb_manager(patterns: list[dict]):
+        """Create a mock KB manager with pattern entries."""
+        from unittest.mock import MagicMock
+
+        class MockKBItem:
+            def __init__(self, key, value):
+                self.key = key
+                self.value = value
+
+        mock_store = MagicMock()
+        mock_items = [
+            MockKBItem(key=p["key"], value={"actions": p["actions"]})
+            for p in patterns
+        ]
+        mock_store.list_category.return_value = mock_items
+
+        mock_kb = MagicMock()
+        mock_kb.store = mock_store
+        return mock_kb
+
+    def test_matches_known_pattern(self):
+        """A sequence matching a KB pattern should be merged."""
+        recognizer = ReferenceActionRecognizer()
+        kb = self._make_mock_kb_manager([
+            {"key": "pattern.login", "actions": ["enter", "click"]},
+        ])
+        actions = [
+            {"action": "enter", "component": "username", "raw_steps": [{"step": 1}]},
+            {"action": "click", "component": "login_btn", "raw_steps": [{"step": 2}]},
+        ]
+        result = recognizer._match_kb_patterns(actions, kb)
+        assert len(result) == 1
+        assert result[0]["type"] == "kb_pattern"
+        assert result[0]["action"] == "login"
+        assert len(result[0]["sub_actions"]) == 2
+        assert len(result[0]["raw_steps"]) == 2
+
+    def test_matches_pattern_from_steps_key(self):
+        """Patterns with 'steps' key (legacy format) should also work."""
+        from unittest.mock import MagicMock
+
+        class MockKBItem:
+            def __init__(self, key, value):
+                self.key = key
+                self.value = value
+
+        mock_store = MagicMock()
+        mock_store.list_category.return_value = [
+            MockKBItem(key="pattern.login", value={"steps":
+                ["enter_username", "enter_password", "click_login"]}),
+        ]
+        mock_kb = MagicMock()
+        mock_kb.store = mock_store
+
+        recognizer = ReferenceActionRecognizer()
+        actions = [
+            {"action": "enter_username", "component": "user", "raw_steps": [{"s": 1}]},
+            {"action": "enter_password", "component": "pass", "raw_steps": [{"s": 2}]},
+            {"action": "click_login", "component": "btn", "raw_steps": [{"s": 3}]},
+        ]
+        result = recognizer._match_kb_patterns(actions, mock_kb)
+        assert len(result) == 1
+        assert result[0]["type"] == "kb_pattern"
+        assert result[0]["action"] == "login"
+        assert len(result[0]["sub_actions"]) == 3
+
+    def test_non_matching_sequence_unchanged(self):
+        """A sequence that does not match any KB pattern should be unchanged."""
+        recognizer = ReferenceActionRecognizer()
+        kb = self._make_mock_kb_manager([
+            {"key": "pattern.login", "actions": ["enter", "password", "click"]},
+        ])
+        actions = [
+            {"action": "navigate", "component": "page", "raw_steps": []},
+            {"action": "click", "component": "menu", "raw_steps": []},
+        ]
+        result = recognizer._match_kb_patterns(actions, kb)
+        assert len(result) == 2
+        assert result[0]["action"] == "navigate"
+        assert result[1]["action"] == "click"
+
+    def test_no_kb_manager_returns_unchanged(self):
+        """Without a KB manager, actions should be returned as-is."""
+        recognizer = ReferenceActionRecognizer()
+        actions = [
+            {"action": "click", "component": "btn"},
+            {"action": "input", "component": "field"},
+        ]
+        result = recognizer._match_kb_patterns(actions, None)
+        assert result == actions
+
+    def test_empty_actions_unchanged(self):
+        """Empty action list returns as-is."""
+        recognizer = ReferenceActionRecognizer()
+        kb = self._make_mock_kb_manager([
+            {"key": "pattern.foo", "actions": ["a", "b"]},
+        ])
+        result = recognizer._match_kb_patterns([], kb)
+        assert result == []
+
+    def test_single_action_unchanged(self):
+        """Single action should not be merged (need at least 2)."""
+        recognizer = ReferenceActionRecognizer()
+        kb = self._make_mock_kb_manager([
+            {"key": "pattern.foo", "actions": ["click"]},
+        ])
+        actions = [{"action": "click", "component": "btn"}]
+        result = recognizer._match_kb_patterns(actions, kb)
+        assert len(result) == 1
+        assert result[0]["action"] == "click"
+
+    def test_empty_patterns_unchanged(self):
+        """KB with empty patterns category returns actions unchanged."""
+        from unittest.mock import MagicMock
+        mock_store = MagicMock()
+        mock_store.list_category.return_value = []
+        mock_kb = MagicMock()
+        mock_kb.store = mock_store
+
+        recognizer = ReferenceActionRecognizer()
+        actions = [
+            {"action": "click", "component": "btn"},
+            {"action": "input", "component": "field"},
+        ]
+        result = recognizer._match_kb_patterns(actions, mock_kb)
+        assert result == actions
+
+    def test_subsequence_match_with_prefix(self):
+        """Pattern match should work even with non-matching prefix/suffix."""
+        recognizer = ReferenceActionRecognizer()
+        kb = self._make_mock_kb_manager([
+            {"key": "pattern.search", "actions": ["input", "click"]},
+        ])
+        actions = [
+            {"action": "navigate", "component": "page", "raw_steps": [{"s": 0}]},
+            {"action": "input", "component": "search_box", "raw_steps": [{"s": 1}]},
+            {"action": "click", "component": "search_btn", "raw_steps": [{"s": 2}]},
+            {"action": "assert", "component": "result", "raw_steps": [{"s": 3}]},
+        ]
+        result = recognizer._match_kb_patterns(actions, kb)
+        assert len(result) == 3  # navigate, merged kb_pattern, assert
+        assert result[1]["type"] == "kb_pattern"
+        assert result[1]["action"] == "search"
+        assert result[0]["action"] == "navigate"
+        assert result[2]["action"] == "assert"
+
+    def test_partial_match_ignored(self):
+        """Substring match (e.g., 'click' in 'click_login') should match via containment."""
+        recognizer = ReferenceActionRecognizer()
+        kb = self._make_mock_kb_manager([
+            {"key": "pattern.login", "actions": ["enter", "click"]},
+        ])
+        actions = [
+            {"action": "enter", "raw_steps": [{"s": 1}]},
+            {"action": "click_login_btn", "raw_steps": [{"s": 2}]},
+        ]
+        result = recognizer._match_kb_patterns(actions, kb)
+        # "click" should be found in "click_login_btn" via substring match
+        assert len(result) == 1
+        assert result[0]["type"] == "kb_pattern"
+        assert result[0]["action"] == "login"
+
+    def test_kb_manager_store_error_graceful(self):
+        """If store.list_category raises, actions are returned unchanged."""
+        from unittest.mock import MagicMock
+        mock_store = MagicMock()
+        mock_store.list_category.side_effect = RuntimeError("disk error")
+        mock_kb = MagicMock()
+        mock_kb.store = mock_store
+
+        recognizer = ReferenceActionRecognizer()
+        actions = [
+            {"action": "click", "component": "btn"},
+        ]
+        result = recognizer._match_kb_patterns(actions, mock_kb)
+        assert result == actions
+
+
+# ═══════════════════════════════════════════════════════════════
+# KB 驱动噪声过滤 — 定位器属性白名单
+# ═══════════════════════════════════════════════════════════════
+
+class TestKBDrivenNoiseFilter:
+    """KB 驱动定位器白名单过滤 MutationObserver 噪声测试"""
+
+    def test_locator_whitelist_filters_mutations(self):
+        """验证 setting locator_attrs 后 RECORDER_JS 包含过滤函数和白名单变量"""
+        from uibridge.engine.recorder import RECORDER_JS
+        assert "_has_locator_attr" in RECORDER_JS, \
+            "RECORDER_JS should contain _has_locator_attr helper"
+        assert "_mutation_batch_has_locator" in RECORDER_JS, \
+            "RECORDER_JS should contain _mutation_batch_has_locator filter"
+        assert "window.__uibridge_locator_attrs" in RECORDER_JS, \
+            "RECORDER_JS should reference window.__uibridge_locator_attrs"
+
+    def test_no_whitelist_reports_all(self):
+        """验证无 locator_attrs 时默认报告所有 mutation（向后兼容）"""
+        from uibridge.engine.recorder import RECORDER_JS
+        # _mutation_batch_has_locator 在无白名单时返回 true（不过滤）
+        assert "if (!attrs || attrs.length === 0) return true" in RECORDER_JS, \
+            "When no whitelist, _mutation_batch_has_locator should return true (no filter)"
+
+    def test_recording_session_accepts_locator_attrs(self):
+        """验证 RecordingSession 接受 locator_attrs 参数并存储"""
+        from uibridge.engine.recorder import RecordingSession
+        import inspect
+        sig = inspect.signature(RecordingSession.__init__)
+        assert "locator_attrs" in sig.parameters, \
+            "RecordingSession.__init__ should accept locator_attrs parameter"
+
+    def test_locator_attrs_default_is_none(self):
+        """验证 locator_attrs 默认值为 None（不改变现有行为）"""
+        import inspect
+        from uibridge.engine.recorder import RecordingSession
+        sig = inspect.signature(RecordingSession.__init__)
+        param = sig.parameters["locator_attrs"]
+        assert param.default is None, \
+            "locator_attrs should default to None for backward compatibility"
+
+    def test_pipeline_record_forwards_locator_attrs(self):
+        """验证 Pipeline.record() 将 locator_attrs 转发给 RecordingSession"""
+        import inspect
+        from uibridge.pipeline import Pipeline
+        sig = inspect.signature(Pipeline.record)
+        assert "locator_attrs" in sig.parameters, \
+            "Pipeline.record() should accept locator_attrs parameter"
+
+    def test_click_input_nav_always_reported(self):
+        """验证非 mutation 事件（click/input/navigate）不受白名单影响"""
+        from uibridge.engine.recorder import RECORDER_JS
+        # click、dblclick、input、change、keydown 等事件直接调用 __uibridge_report，
+        # 不经过 _mutation_batch_has_locator 过滤器
+        mutation_section_start = RECORDER_JS.index("MutationObserver")
+        before_mo = RECORDER_JS[:mutation_section_start]
+        # _mutation_batch_has_locator 只在 MutationObserver 节中引用
+        assert "_mutation_batch_has_locator" not in before_mo, \
+            "Non-mutation events (before MutationObserver section) should not reference mutation filter"
+
+    def test_has_locator_attr_js_logic(self):
+        """验证 _has_locator_attr JS 函数的核心逻辑"""
+        from uibridge.engine.recorder import RECORDER_JS
+        # 向上查找最多 5 层
+        assert "i < 5" in RECORDER_JS, \
+            "_has_locator_attr should check up to 5 ancestor levels"
+        # 使用 hasAttribute 检查白名单属性
+        assert "node.hasAttribute(attr)" in RECORDER_JS, \
+            "_has_locator_attr should use hasAttribute to check whitelisted attrs"
+        # 当 attrs 为空时跳过检查
+        assert "node.getAttribute && attrs" in RECORDER_JS, \
+            "_has_locator_attr should guard on getAttribute and attrs existence"
+
+    def test_mcp_server_start_recording_queries_kb(self):
+        """验证 start_recording 中查询 KB 获取定位器约定的代码存在"""
+        import inspect
+        from uibridge.mcp_server import start_recording
+        source = inspect.getsource(start_recording)
+        assert "get_locator_conventions" in source, \
+            "start_recording should query KB for locator conventions"
+        assert "locator_attrs" in source, \
+            "start_recording should define locator_attrs variable"
+        assert "pipeline.record(page, locator_attrs=locator_attrs)" in source, \
+            "start_recording should pass locator_attrs to pipeline.record()"
