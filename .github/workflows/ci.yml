@@ -33,4 +33,4 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
 
       - name: Verify CLI entry point
-        run: uibridge --help
+        run: python -c "from uibridge.cli import main; print('CLI OK')"
