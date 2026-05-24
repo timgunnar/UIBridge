@@ -1,21 +1,19 @@
 """Screenplay 适配器 — B 公司风格的适配器实现"""
 
 import re
+import logging
 
-from jinja2 import Environment, BaseLoader
+logger = logging.getLogger(__name__)
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
     MethodTemplate, ComponentDef, PageComponent, PageDef,
     BAWDef, BAWOperationDef, CallDef,
-    ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
-    sanitize_identifier,
+    sanitize_identifier, extract_domain,
+    JINJA_ENV,
 )
-
-_JINJA_ENV = Environment(loader=BaseLoader())
-_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 class ScreenplayComponentResolver(ComponentResolver):
@@ -97,7 +95,7 @@ class ScreenplayComponentResolver(ComponentResolver):
         return role_map.get(aria_role.lower(), "Target")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
-        domain = self._extract_domain(url)
+        domain = extract_domain(url)
         data_module = dom_attrs.get("data-module", "")
         if data_module:
             return data_module.replace("-", "_").upper()
@@ -107,10 +105,6 @@ class ScreenplayComponentResolver(ComponentResolver):
         return self.METHOD_TEMPLATES.get(component_type, [
             MethodTemplate("locate", [], "read", "Target"),
         ])
-
-    def _extract_domain(self, url: str) -> str:
-        match = _DOMAIN_RE.search(url)
-        return match.group(1) if match else "unknown"
 
 
 class ScreenplayLocatorStrategy(LocatorStrategy):
@@ -127,11 +121,11 @@ class ScreenplayLocatorStrategy(LocatorStrategy):
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
         # 1. 向上查找最近的 data-module 祖先
-        for ancestor in element_info.ancestor_chain:
-            anc_attrs = ancestor.get("attrs", {})
-            if "data-module" in anc_attrs:
-                module = anc_attrs["data-module"]
-                best = self._best_attr(attrs)
+        for selector in self._build_ancestor_chain(element_info, max_depth=3):
+            m = re.search(r"data-module='([^']+)'", selector)
+            if m:
+                module = m.group(1)
+                best = self.best_attr(element_info)
                 if best and attrs.get(best):
                     return f"[data-module='{module}'] [{best}='{attrs[best]}']"
                 return f"[data-module='{module}']"
@@ -143,7 +137,9 @@ class ScreenplayLocatorStrategy(LocatorStrategy):
             return f"text={element_info.text[:30]}"
         return ""
 
-    def _best_attr(self, attrs: dict) -> str:
+    def best_attr(self, element) -> str:
+        """Return best attribute name for Screenplay locator construction."""
+        attrs = element.attributes if hasattr(element, 'attributes') else element.attrs
         for attr in ["data-test", "data-testid", "id", "name", "aria-label"]:
             if attr in attrs and attrs[attr]:
                 return attr
@@ -233,34 +229,18 @@ class ScreenplayCodeGenerator(CodeGenerator):
     def generate_business_aw(self, baw_def: BAWDef) -> str:
         return self._render_task_class(baw_def)
 
-    def generate_test_script(self, script_def: ScriptDef) -> str:
-        template = _JINJA_ENV.from_string(SCREENPLAY_TEST_TEMPLATE)
+    def generate_test_script(self, script_def: ScriptDef,
+                             template_path: str = "") -> str:
+        template = JINJA_ENV.from_string(SCREENPLAY_TEST_TEMPLATE)
         return template.render(s=script_def)
 
-    def generate_test_data(self, data_def: TestDataDef) -> str:
-        template = _JINJA_ENV.from_string(SCREENPLAY_FACTORY_TEMPLATE)
+    def generate_test_data(self, data_def: TestDataDef,
+                           template_path: str = "") -> str:
+        template = JINJA_ENV.from_string(SCREENPLAY_FACTORY_TEMPLATE)
         return template.render(d=data_def)
 
-    def get_import_style(self) -> ImportStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "import_style" in item.key:
-                    examples = item.value.get("examples", [])
-                    return ImportStyle(from_imports=examples or [
-                        "from screenplay.actor import Actor",
-                        "from screenplay.abilities import BrowseTheWeb",
-                    ])
-        return ImportStyle(from_imports=[
-            "from screenplay.actor import Actor",
-            "from screenplay.abilities import BrowseTheWeb",
-        ])
-
-    def get_assertion_style(self) -> AssertionStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "assertion_style" in item.key:
-                    return AssertionStyle(type=item.value.get("type", "pytest_assert"))
-        return AssertionStyle(type="pytest_assert")
+    def _default_assertion_style(self) -> str:
+        return "pytest_assert"
 
     def render_step(self, step) -> str:
         """Screenplay 风格步骤渲染"""
@@ -321,7 +301,7 @@ class ScreenplayCodeGenerator(CodeGenerator):
             return f'# TODO: assert {candidate}'
 
     def _render_target_class(self, comp_def: ComponentDef) -> str:
-        template = _JINJA_ENV.from_string(SCREENPLAY_TARGET_TEMPLATE)
+        template = JINJA_ENV.from_string(SCREENPLAY_TARGET_TEMPLATE)
         return template.render(comp=comp_def)
 
     def _render_task_class(self, baw_def: BAWDef) -> str:
@@ -342,7 +322,7 @@ class ScreenplayCodeGenerator(CodeGenerator):
                 else:
                     steps_code += f"        actor.attempts_to({method}({component}))\n"
 
-        template = _JINJA_ENV.from_string(SCREENPLAY_TASK_TEMPLATE)
+        template = JINJA_ENV.from_string(SCREENPLAY_TASK_TEMPLATE)
         return template.render(class_name=baw_def.class_name, steps=steps_code.strip())
 
 

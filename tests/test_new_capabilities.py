@@ -1522,3 +1522,175 @@ class TestKBDrivenNoiseFilter:
             "start_recording should define locator_attrs variable"
         assert "pipeline.record(page, locator_attrs=locator_attrs)" in source, \
             "start_recording should pass locator_attrs to pipeline.record()"
+
+
+# ═══════════════════════════════════════════════════════════════
+# KBEvolution — KB 生命周期演化：衰减、泛化、归档
+# ═══════════════════════════════════════════════════════════════
+
+class TestKBEvolution:
+    """KBEvolution: decay, generalize, archive lifecycle tests."""
+
+    def test_evolve_applies_decay(self):
+        """Item with decay_rate>0 and old last_validated_at should have score decrease."""
+        import tempfile
+        import shutil
+        import time
+        from uibridge.kb.kb_store import KBStore
+        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.kb_evolution import KBEvolution
+
+        td = tempfile.mkdtemp()
+        try:
+            store = KBStore(td)
+            item = KBItem(
+                id="evolve_decay_1",
+                category="components",
+                key="component.test_decay",
+                value={"xpath": "//btn"},
+                confidence=Confidence(
+                    score=0.8,
+                    source=KnowledgeSource.LLM_INFERENCE,
+                    last_validated_at=time.time() - 864000,
+                ),
+            )
+            store.save(item)
+            original_score = item.confidence.score
+
+            evolution = KBEvolution(store)
+            evolution.evolve()
+
+            updated = store.get("components", "evolve_decay_1")
+            assert updated is not None
+            assert updated.confidence.score < original_score, \
+                f"Score should decrease from {original_score}, got {updated.confidence.score}"
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_evolve_ignores_archived(self):
+        """Archived items should not be affected by evolution."""
+        import tempfile
+        import shutil
+        import time
+        from uibridge.kb.kb_store import KBStore
+        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.kb_evolution import KBEvolution
+
+        td = tempfile.mkdtemp()
+        try:
+            store = KBStore(td)
+            item = KBItem(
+                id="evolve_archived_1",
+                category="components",
+                key="component.archived_item",
+                value={"xpath": "//old"},
+                confidence=Confidence(
+                    score=0.1,
+                    source=KnowledgeSource.PATTERN_MINING,
+                    last_validated_at=time.time() - 864000,
+                ),
+                archived=True,
+            )
+            store.save(item)
+            original_score = item.confidence.score
+
+            evolution = KBEvolution(store)
+            evolution.evolve()
+
+            updated = store.get("components", "evolve_archived_1")
+            assert updated is not None
+            assert updated.confidence.score == original_score, \
+                "Archived item score should not change"
+            assert updated.archived is True
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_evolve_archives_low_confidence_with_failures(self):
+        """Item with effective_score<0.2 and 3+ failures should be archived."""
+        import tempfile
+        import shutil
+        from uibridge.kb.kb_store import KBStore
+        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.kb_evolution import KBEvolution
+
+        td = tempfile.mkdtemp()
+        try:
+            store = KBStore(td)
+            item = KBItem(
+                id="evolve_archive_1",
+                category="components",
+                key="component.archive_me",
+                value={"xpath": "//bad"},
+                confidence=Confidence(
+                    score=0.15,
+                    source=KnowledgeSource.HUMAN_INJECTION,
+                    self_test_failures=3,
+                ),
+            )
+            store.save(item)
+
+            evolution = KBEvolution(store)
+            evolution.evolve()
+
+            # 通过 search/archive 目录检查（KBItem.archived was set True by archive()）
+            updated = store.get("components", "evolve_archive_1")
+            if updated is not None:
+                # 如果仍在原位置，检查 archived 标记
+                assert updated.archived is True
+            else:
+                # 如果已移动到 archive 目录，也算成功
+                pass
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_evolve_empty_store(self):
+        """Evolution on an empty store should not crash."""
+        import tempfile
+        import shutil
+        from uibridge.kb.kb_store import KBStore
+        from uibridge.kb.kb_evolution import KBEvolution
+
+        td = tempfile.mkdtemp()
+        try:
+            store = KBStore(td)
+            evolution = KBEvolution(store)
+            evolution.evolve()  # Should not raise
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_generalize_boosts_patterns(self):
+        """3+ items with same structural value signature get 'generalized' tag + score boost."""
+        import tempfile
+        import shutil
+        from uibridge.kb.kb_store import KBStore
+        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.kb_evolution import KBEvolution
+
+        td = tempfile.mkdtemp()
+        try:
+            store = KBStore(td)
+            for i in range(3):
+                item = KBItem(
+                    id=f"gen_{i}",
+                    category="components",
+                    key=f"component.gen_{i}",
+                    value={"xpath": "//table", "role": "table"},
+                    confidence=Confidence(
+                        score=0.6,
+                        source=KnowledgeSource.STATIC_ANALYSIS,
+                    ),
+                )
+                store.save(item)
+
+            evolution = KBEvolution(store)
+            evolution.evolve()
+
+            for i in range(3):
+                updated = store.get("components", f"gen_{i}")
+                assert updated is not None, f"Item gen_{i} should still exist"
+                assert "generalized" in updated.tags, \
+                    f"Item gen_{i} should have 'generalized' tag"
+                assert updated.confidence.score > 0.64, \
+                    f"Item gen_{i} score should be boosted, got {updated.confidence.score}"
+        finally:
+            shutil.rmtree(td, ignore_errors=True)

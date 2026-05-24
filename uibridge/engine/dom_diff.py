@@ -4,6 +4,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from collections import Counter
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

@@ -1,21 +1,20 @@
 """参考适配器实现 — ComponentAW + BusinessAW + TestData 模式"""
 
 import re
+from pathlib import Path
+import logging
 
-from jinja2 import Environment, BaseLoader
+logger = logging.getLogger(__name__)
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
     MethodTemplate, ComponentDef, PageComponent, PageDef,
     BAWDef, BAWOperationDef, CallDef,
-    ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
-    sanitize_identifier,
+    sanitize_identifier, extract_domain,
+    JINJA_ENV,
 )
-
-_JINJA_ENV = Environment(loader=BaseLoader())
-_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -251,7 +250,7 @@ class ReferenceComponentResolver(ComponentResolver):
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
         """自动命名：URL 提取 domain + role 组合"""
-        domain = self._extract_domain(url)
+        domain = extract_domain(url)
         role = aria_role or "element"
         data_module = dom_attrs.get("data-module", "")
         if data_module:
@@ -282,13 +281,6 @@ class ReferenceComponentResolver(ComponentResolver):
             return "TabAW"
         return self.ARIA_MAP.get(aria_role, "UnknownAW")
 
-    def _extract_domain(self, url: str) -> str:
-        match = _DOMAIN_RE.search(url)
-        if match:
-            return match.group(1)
-        parts = url.rstrip("/").split("/")
-        return parts[-1] if parts else "unknown"
-
 
 # ═══════════════════════════════════════════════════════════════
 # LocatorStrategy 参考实现
@@ -308,11 +300,12 @@ class ReferenceLocatorStrategy(LocatorStrategy):
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
         # 1. 向上查找最近的 data-module 祖先
-        for ancestor in element_info.ancestor_chain:
-            anc_attrs = ancestor.get("attrs", {})
-            if "data-module" in anc_attrs:
-                module = anc_attrs["data-module"]
-                return f"//*[@data-module='{module}']//{element_info.tag}[@{self._best_attr(attrs)}='{attrs.get(self._best_attr(attrs))}']"
+        for selector in self._build_ancestor_chain(element_info, max_depth=3):
+            m = re.search(r"data-module='([^']+)'", selector)
+            if m:
+                module = m.group(1)
+                best = self.best_attr(element_info)
+                return f"//*[@data-module='{module}']//{element_info.tag}[@{best}='{attrs.get(best)}']"
         # 2. 元素自身的稳定属性
         for attr in ["data-module", "data-testid", "id", "name"]:
             if attr in attrs and attrs[attr]:
@@ -332,7 +325,9 @@ class ReferenceLocatorStrategy(LocatorStrategy):
             return {"type": "text-contains", "value": match.group(1)}
         return {"type": "xpath", "value": xpath}
 
-    def _best_attr(self, attrs: dict) -> str:
+    def best_attr(self, element) -> str:
+        """Return best attribute name for XPath construction."""
+        attrs = element.attributes if hasattr(element, 'attributes') else element.attrs
         for attr in ["data-testid", "id", "name", "aria-label"]:
             if attr in attrs and attrs[attr]:
                 return attr
@@ -346,84 +341,8 @@ class ReferenceLocatorStrategy(LocatorStrategy):
 class ReferenceActionRecognizer(ActionRecognizer):
     """将 DOM 操作序列聚合为 BAW 语义"""
 
-    def aggregate(self, raw_steps: list, page_context: dict) -> list:
-        from ..engine.ir.raw_recording import RawStep, ActionType
-        actions = []
-        buffer = []
-        current_type = None
-
-        for step in raw_steps:
-            if isinstance(step, dict):
-                step_type = step.get("action", "")
-            else:
-                step_type = step.action.value if hasattr(step.action, "value") else str(step.action)
-
-            if step_type == "navigate":
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                current_type = "navigation"
-                buffer.append(step)
-            elif step_type in ("input", "fill"):
-                if current_type == "click":
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = "input"
-            elif step_type == "click":
-                if current_type == "input":
-                    buffer.append(step)
-                else:
-                    if buffer:
-                        actions.append(self._aggregate_buffer(buffer, current_type))
-                        buffer = []
-                    buffer.append(step)
-                current_type = "click"
-            else:
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = step_type
-
-        if buffer:
-            actions.append(self._aggregate_buffer(buffer, current_type))
-
-        return actions
-
-    def _aggregate_buffer(self, buffer: list, action_type: str) -> dict:
-        if not buffer:
-            return {}
-        first = buffer[0]
-
-        # 提取目标标签和 tag（用于标识符清洗回退）
-        target_label = ""
-        target_tag = ""
-        if isinstance(first, dict):
-            t = first.get("target", {})
-            if isinstance(t, dict):
-                target_label = t.get("label", "")
-                target_tag = t.get("tag", "")
-        elif hasattr(first, 'target') and first.target:
-            target_label = first.target.label or ""
-            target_tag = first.target.tag or ""
-
-        # 提取值
-        value = ""
-        if isinstance(first, dict):
-            value = first.get("value", "")
-        else:
-            value = getattr(first, 'value', '') or ''
-
-        base = {
-            "raw_steps": list(buffer),
-            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
-            "value": value,
-        }
-
-        if action_type == "input" and len(buffer) >= 2:
-            return {**base, "type": "composite_action", "action": "input_then_click", "steps": len(buffer)}
-        return {**base, "type": "single_action", "action": action_type, "steps": len(buffer)}
+    def _composite_action_name(self) -> str:
+        return "input_then_click"
 
     def recognize_pattern(self, sequences: list) -> list[dict]:
         """PrefixSpan 频繁子序列挖掘 — 发现可封装的 BAW 模式（中文建议）"""
@@ -447,50 +366,42 @@ class ReferenceCodeGenerator(CodeGenerator):
         self.kb = kb_manager
 
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
-        template = _JINJA_ENV.from_string(COMPONENT_AW_TEMPLATE)
+        template = JINJA_ENV.from_string(COMPONENT_AW_TEMPLATE)
         return template.render(comp=comp_def)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        template = _JINJA_ENV.from_string(BUSINESS_AW_TEMPLATE)
+        template = JINJA_ENV.from_string(BUSINESS_AW_TEMPLATE)
         return template.render(baw=baw_def)
 
-    def generate_test_script(self, script_def: ScriptDef) -> str:
-        template = _JINJA_ENV.from_string(TEST_SCRIPT_TEMPLATE)
+    def generate_test_script(self, script_def: ScriptDef,
+                             template_path: str = "") -> str:
+        if template_path:
+            try:
+                source = Path(template_path).read_text("utf-8")
+                template = JINJA_ENV.from_string(source)
+            except Exception:
+                logger.warning("Failed to load custom test script template, falling back to default", exc_info=True)
+                template = JINJA_ENV.from_string(TEST_SCRIPT_TEMPLATE)
+        else:
+            template = JINJA_ENV.from_string(TEST_SCRIPT_TEMPLATE)
         return template.render(s=script_def)
 
-    def generate_test_data(self, data_def: TestDataDef) -> str:
-        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(TEST_DATA_TEMPLATE)
+    def generate_test_data(self, data_def: TestDataDef,
+                           template_path: str = "") -> str:
+        JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        if template_path:
+            try:
+                source = Path(template_path).read_text("utf-8")
+                template = JINJA_ENV.from_string(source)
+            except Exception:
+                logger.warning("Failed to load custom test data template, falling back to default", exc_info=True)
+                template = JINJA_ENV.from_string(TEST_DATA_TEMPLATE)
+        else:
+            template = JINJA_ENV.from_string(TEST_DATA_TEMPLATE)
         return template.render(d=data_def)
 
-    def get_import_style(self) -> ImportStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "import_style" in item.key:
-                    examples = item.value.get("examples", [])
-                    return ImportStyle(
-                        from_imports=examples or [
-                            "from pages.homepage import HomePage",
-                            "from aaw.input_aw import InputAW",
-                        ],
-                        direct_imports=["pytest"],
-                    )
-        return ImportStyle(
-            from_imports=[
-                "from pages.homepage import HomePage",
-                "from aaw.input_aw import InputAW",
-                "from aaw.button_aw import ButtonAW",
-                "from baw.user_crud import UserCrud",
-            ],
-            direct_imports=["pytest"],
-        )
-
-    def get_assertion_style(self) -> AssertionStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "assertion_style" in item.key:
-                    return AssertionStyle(type=item.value.get("type", "pytest_assert"))
-        return AssertionStyle(type="pytest_assert")
+    def _default_assertion_style(self) -> str:
+        return "pytest_assert"
 
     def render_step(self, step) -> str:
         """Python ComponentAW 风格步骤渲染"""

@@ -1,6 +1,9 @@
 """IR v2: SemanticActionSequence — 语义理解层的输出，将 DOM 操作聚合为业务动作"""
 
 from dataclasses import dataclass, field
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

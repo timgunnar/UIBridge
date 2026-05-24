@@ -29,8 +29,8 @@ recording.json
 .DS_Store
 Thumbs.db
 
-# Claude Code — local settings (permissions are per-user)
-.claude/settings.local.json
+# Claude Code — dev tool artifacts, not for release
+.claude/
 
 # Playwright MCP artifacts
 .playwright-mcp/
@@ -38,3 +38,6 @@ Thumbs.db
 # Node (Playwright MCP)
 node_modules/
 package-lock.json
+
+# uibridge runtime data (auto-generated)
+.uibridge/

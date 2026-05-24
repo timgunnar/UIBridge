@@ -13,7 +13,7 @@ uibridge 通过 MCP Server 暴露 10 个工具，供 AI Agent（Claude Code 等�
 | 5 | `stop_recording` | 停止录制并保存 | 三段式录制第三步 |
 | 6 | `generate_test_code` | 生成分层测试代码 | 录制完成后生成代码 |
 | 7 | `diff_snapshots` | 对比页面快照差异 | 生成断言候选 |
-| 8 | `seed_knowledge_base` | 扫描源码播种 KB | 首次接入新项目 |
+| 8 | `seed_knowledge_base` | 两阶段播种：画像 + KB | 首次接入、框架变更后重新画像 |
 | 9 | `query_knowledge_base` | 查询框架约定 | 了解项目组件和定位策略 |
 | 10 | `update_knowledge_base` | NL 对话式 KB 管理 | 通过对话增删改查 KB |
 
@@ -38,7 +38,7 @@ uibridge 通过 MCP Server 暴露 10 个工具，供 AI Agent（Claude Code 等�
     "firefox": {"available": true, "path": "..."}
   },
   "issues": [],
-  "uibridge_version": "0.3.1"
+  "uibridge_version": "0.3.3"
 }
 ```
 
@@ -217,7 +217,7 @@ generated/
 
 ## 8. seed_knowledge_base
 
-**用途**：从企业项目的源码目录提取知识，播种知识库。
+**用途**：两阶段播种。Phase 1：ProfileManager 扫描项目建立/更新框架画像（`.uibridge/profile.yaml`）；Phase 2：基于画像过滤，只扫描 UI 文件，按组件族聚合生成 KBItems（`.uibridge/kb/`）。
 
 **参数**：
 
@@ -225,34 +225,52 @@ generated/
 |------|------|------|------|
 | `project_dir` | string | 是 | 项目根目录路径 |
 
-**返回**：播种的 KB 条目数量和分类统计。
+**返回**：画像更新摘要 + 播种的 KB 条目数量和分类统计。
 
-**提取内容**：
-- 组件定义（从 Python AST / Java 源码解析）
-- 定位器约定（XPath、CSS 模式）
-- 命名规则
-- 设计文档中的 YAML frontmatter
+**Phase 1 — 框架画像**：
+- 由 ProfileManager 独立管理，不通过 KBManager
+- 扫描源码目录结构，识别 UI 包路径、基类体系、定位器优先级
+- 持久化到 `.uibridge/profile.yaml`，带 TTL 缓存
+- 画像作为项目结构的单一事实来源
 
-**使用时机**：首次接入新项目时，让 Agent 自动学习框架知识。
+**Phase 2 — KB 条目聚合**：
+- 基于画像的 UI 包路径过滤源码扫描范围
+- 只分析 UI 相关文件，按组件族聚合
+- 生成聚合后的 KBItems 写入 `.uibridge/kb/`
+
+**画像相关操作**：
+- `reprofile`、`update_profile`、`confirm_profile` 通过 KBManager 委托 ProfileManager 执行
+- 画像更新后，可用 `query_knowledge_base("定位器约定")` 验证最新策略
 
 **自动检测**：
 - 识别项目语言（Python / Java）
 - 自动检测源码目录结构（含 pom.xml 非标布局）
-- 非 Java/Python 项目返回空（不会报错）
+- 非 Java/Python 项目仅生成画像（KB 部分返回空）
 
 **返回示例**：
 ```json
 {
   "status": "ok",
-  "total_items": 23,
-  "by_category": {
-    "components": 15,
-    "conventions": 5,
-    "pages": 3
+  "profile": {
+    "updated": true,
+    "file": "/path/to/.uibridge/profile.yaml",
+    "ui_packages": ["components", "pages"],
+    "base_classes": ["BaseAW", "TableAW", "FormAW"],
+    "locator_priority": ["data-testid", "id", "css", "xpath"]
   },
-  "kb_dir": "/path/to/.uibridge/kb"
+  "kb": {
+    "total_items": 23,
+    "by_category": {
+      "components": 15,
+      "conventions": 5,
+      "pages": 3
+    },
+    "kb_dir": "/path/to/.uibridge/kb"
+  }
 }
 ```
+
+**使用时机**：首次接入新项目时，让 Agent 自动学习框架知识。框架升级后重新播种以更新画像和 KB。
 
 ---
 

@@ -211,6 +211,7 @@ class AriaAnalyzer:
                         interactables=self._find_interactables(el),
                     ))
             except Exception:
+                logger.warning("Failed to discover custom components via attribute %s", attr, exc_info=True)
                 continue
         return components
 
@@ -230,6 +231,7 @@ class AriaAnalyzer:
                     )
                     return f"//{tag}[@{attr_name}='{val}']"
             except Exception:
+                logger.warning("Failed to build stable XPath via attribute strategy", exc_info=True)
                 continue
         try:
             return element.evaluate("""
@@ -249,6 +251,7 @@ class AriaAnalyzer:
                 }
             """)
         except Exception:
+            logger.warning("Failed to build XPath via JS evaluation", exc_info=True)
             return ""
 
     def _extract_children(self, element) -> list[dict]:
@@ -268,6 +271,7 @@ class AriaAnalyzer:
             """)
             children = child_elements or []
         except Exception:
+            logger.warning("Failed to extract child elements from component", exc_info=True)
             pass
         return children
 
@@ -285,6 +289,7 @@ class AriaAnalyzer:
                     }))
             """) or []
         except Exception:
+            logger.warning("Failed to find input elements within component", exc_info=True)
             return []
 
     def _find_interactables(self, element) -> list[dict]:
@@ -300,6 +305,7 @@ class AriaAnalyzer:
                     }))
             """) or []
         except Exception:
+            logger.warning("Failed to find interactable elements within component", exc_info=True)
             return []
 
     def _guess_component_type(self, attr_value: str) -> str:

@@ -1,5 +1,116 @@
 # CHANGELOG
 
+## v0.3.5
+
+### 架构重构
+
+**循环依赖消除** — KBManager ↔ ProfileManager 循环引用已完全解除：
+- KBManager 不再创建 ProfileManager 实例，通过构造函数注入接收
+- ProfileManager 使用顶层 import 引用 KBExtractor 和 SourceDetector，移除 4 处 lazy import
+- KBManager 移除 5 个纯委托方法（get_profile / reprofile / update_profile / confirm_profile / enhance_profile_from_document）
+- 两个服务完全独立，由 Pipeline 编排层协调
+
+**Pipeline 拆分** — 从 ~875 行单文件拆为 `pipeline/` 包：
+- `_orchestrator.py`：~206 行编排器，持有 4 个 stage 引用
+- `stage_recording.py`：录制阶段管理
+- `stage_analysis.py`：RawRecording → SemanticActionSequence
+- `stage_mapping.py`：SemanticAction → FrameworkCall
+- `stage_generation.py`：代码生成 + 自检 + fix-and-retry
+
+**适配器去重** — 5 个适配器的重复代码统一到 `adapter/base.py`：
+- `extract_domain()`、`JINJA_ENV`、`resolve_package()`、`common_package_prefix()` 共享函数
+- `LocatorStrategy.best_attr()` 基类默认实现 + `_build_ancestor_chain()` 共享 helper
+- `ActionRecognizer.aggregate()` 模板方法（`_should_aggregate` / `_flush_buffer` 钩子）
+- `CodeGenerator.get_import_style()` / `get_assertion_style()` KB 查询+回退默认实现
+- 预期消除 ~1,200 行重复代码
+
+**日志覆盖** — 全部 Python 文件添加 `logger = logging.getLogger(__name__)`，88 处 `except Exception: pass` 添加 `logger.warning(..., exc_info=True)`
+
+**硬编码清理** — Java 包名（`com.acme` 等）提取为 `DEFAULT_PACKAGE` 类常量，数值阈值提取为 Pipeline/MCP 类常量，页面名字符串提取为类常量
+
+**死代码移除** — `custom_playwright_java.py` 中 4 行不可达代码
+
+**动态层驱动代码生成** — 消除硬编码层映射，实现画像驱动的动态生成：
+- `CodeGenerator.generate(def_obj, layer_config)` 统一调度方法，按 `maps_to` 字段路由到具体生成方法
+- `stage_generation.py` 从 `_get_generatable_layers()` 动态获取 `managed_by_user=False` 的层，替代原有硬编码 if 分支
+- `_load_output_config()` 使用通用 `maps_to` 字段匹配，不再绑定特定层名
+- 项目增加新层时只需更新画像 `layer_structure`，无需修改生成逻辑
+
+### 测试
+
+- 297 个测试全部通过（与 v0.3.4 一致，无行为变更）
+
+---
+
+## v0.3.4
+
+### 目录结构重整
+
+**KB 包文件重组** — 可维护性提升：
+- **`kb_extractor.py`（2401 行）拆分为 `kb/extractor/` mixin 子包**：7 个模块（`_base.py`/`_python.py`/`_java.py`/`_documents.py`/`_profile.py`/`_aggregation.py`/`_conventions.py`），每个 <650 行
+- **源检测逻辑独立**：450 行目录检测代码从 `kb_manager.py` 提取为 `kb/source_detection.py`（`SourceDetector` 类）
+- **去 `kb_` 冗余前缀**：`kb_item.py` → `item.py`，`kb_store.py` → `store.py`，`kb_manager.py` → `manager.py`，`kb_evolution.py` → `evolution.py`
+- **`__init__.py` 便捷导入**：`engine/`、`engine/ir/`、`adapter/`、`generator/` 包新增 re-exports，支持 `from uibridge.engine.ir import RawRecording` 短路径
+- **向后兼容**：旧路径（`from uibridge.kb.kb_extractor import KBExtractor` 等）仍可用，触发 `DeprecationWarning`
+
+### 测试
+
+- 297 个测试全部通过（与 v0.3.3 一致，无行为变更）
+
+---
+
+## v0.3.3
+
+### 关键升级
+
+**KB 两阶段聚合提取** — 知识库播种从逐文件 1-YAML-per-file 重构为两阶段聚合：
+- **根因**：大型项目 15,973 个 YAML 中仅 3 个是 UI 组件，其余全是 Model/Service/DTO 噪声
+- **Phase 1 框架画像**：扫描 pom.xml + 抽样源码，生成 `FrameworkProfile`（UI 包路径、基类映射、定位器优先级、命名约定）。存储为 `.uibridge/profile.yaml`
+- **Phase 2 聚合提取**：只扫描 UI 目录，按组件族聚合（Table* → "table"，等同类合并为一个 KBItem）。产出 ~50-200 条精准知识
+- **画像持续演化**：NL 对话更新单个画像字段（"我们的基类是 X"）、文档理解增强画像（"这是我们团队的编码规范.md"）、字段级来源追踪和置信度（auto / human_dialogue / document / runtime）
+- **新增** `FrameworkProfile`、`ProfileField` dataclass；`seed_two_phase()`、`reprofile()`、`update_profile()`、`enhance_profile_from_document()`；PROFILE 意图识别
+- **向后兼容**：旧 `seed_from_static_analysis()` 保留为回退路径；旧 YAML 格式继续可加载
+
+**画像/KB 解耦** — FrameworkProfile 从 KB 模块独立为顶层模块：
+- **新建** `profile.py`、`profile_store.py`、`profile_manager.py` 三个独立模块
+- **存储路径**：画像从 `.uibridge/kb/profile.yaml` 迁移到 `.uibridge/profile.yaml`，首次加载自动迁移
+- **TTL 缓存**：ProfileStore 内置 300 秒内存缓存，减少磁盘 I/O
+- **向后兼容**：`from uibridge.kb import FrameworkProfile, ProfileField` 继续有效
+
+**画像 ProfileField 增强**：
+- 每个 ProfileField 新增 `description` 字段（Agent 可解释性）
+- layer_structure 新增 `maps_to`（层→输出类型映射）和 `managed_by_user`（区分用户维护层/生成层）
+
+**KB 性能优化** — 倒排索引加速搜索：
+- 新增 token + bigram 倒排索引，save/delete 时增量更新
+- 搜索三级退化：索引命中 → 子串匹配 → TF-IDF 关键词评分
+- 大型 KB（200+ 条目）搜索性能提升显著
+
+**快照对比结构化升级** — 方法签名解析：
+- 新增 `_parse_method_signature()` 支持 Java / Python 两种签名格式
+- `compare_snapshot()` 从方法名比较升级为结构化比较（返回类型、参数变更检测）
+- 新增 `signature_changes` 字段标记签名变更
+
+**Pipeline 拆分** — 职责分离：
+- 新增 `DiscoveryService`（`discovery.py`）承载组件发现和 BAW 模式挖掘
+- Pipeline 由 893 行精简为 ~750 行
+
+**KB 生命周期拆分** — 单一职责：
+- 新增 `KBEvolution`（`kb/kb_evolution.py`）— 衰减、泛化、归档
+- 新增 `FreshnessMonitor`（`kb/freshness.py`）— 组件新鲜度检测
+- KBManager 改为委托调用，职责更清晰
+
+**遗留方法标记** — 5 个 `_legacy_extract_*` 方法添加 DeprecationWarning，引导使用 `extract_aggregated()`
+
+**文档**：新增 `docs/profile-maintenance-guide.md`（框架画像维护指南），整体刷新全部文档
+
+### 测试
+
+- 297 个测试全部通过（v0.3.2: 216 个）
+- 新增 81 个测试（KB 两阶段聚合、画像序列化、组件族分组、快照签名解析、索引搜索、缓存失效、KB 演化、组件新鲜度）
+
+---
+
 ## v0.3.2
 
 ### 关键升级

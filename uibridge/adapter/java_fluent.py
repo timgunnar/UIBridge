@@ -2,15 +2,15 @@
 
 import re
 from typing import Optional
+import logging
 
-from jinja2 import Environment, BaseLoader
+logger = logging.getLogger(__name__)
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
     MethodTemplate, ComponentDef,
     BAWDef, CallDef,
-    ImportStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
     scan_java_source_for_package,
     sanitize_identifier,
@@ -18,10 +18,10 @@ from .base import (
     to_java_class_name,
     post_process_java_code,
     format_action_params,
+    extract_domain,
+    JINJA_ENV,
+    resolve_package,
 )
-
-_JINJA_ENV = Environment(loader=BaseLoader())
-_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 class FluentComponentResolver(ComponentResolver):
@@ -113,16 +113,12 @@ class FluentComponentResolver(ComponentResolver):
         data_module = dom_attrs.get("data-module", "")
         if data_module:
             return to_java_class_name(data_module)
-        domain = self._extract_domain(url)
+        domain = extract_domain(url)
         role = aria_role or "Element"
         return f"{to_java_class_name(domain)}{to_java_class_name(role)}"
 
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:
         return self.METHOD_TEMPLATES.get(component_type, self.METHOD_TEMPLATES.get("PageElement", []))
-
-    def _extract_domain(self, url: str) -> str:
-        match = _DOMAIN_RE.search(url)
-        return match.group(1) if match else "unknown"
 
 
 class FluentLocatorStrategy(LocatorStrategy):
@@ -136,11 +132,11 @@ class FluentLocatorStrategy(LocatorStrategy):
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
         # 1. 向上查找最近的 data-module 祖先
-        for ancestor in element_info.ancestor_chain:
-            anc_attrs = ancestor.get("attrs", {})
-            if "data-module" in anc_attrs:
-                module = anc_attrs["data-module"]
-                best = self._best_attr(attrs)
+        for selector in self._build_ancestor_chain(element_info, max_depth=3):
+            m = re.search(r"data-module='([^']+)'", selector)
+            if m:
+                module = m.group(1)
+                best = self.best_attr(element_info)
                 if best and attrs.get(best):
                     return f"[data-module='{module}'] [{best}='{attrs[best]}']"
                 return f"[data-module='{module}']"
@@ -154,7 +150,9 @@ class FluentLocatorStrategy(LocatorStrategy):
             return f"*[name='{attrs['name']}']"
         return ""
 
-    def _best_attr(self, attrs: dict) -> str:
+    def best_attr(self, element) -> str:
+        """Return best attribute name for Fluent locator construction."""
+        attrs = element.attributes if hasattr(element, 'attributes') else element.attrs
         for attr in ["id", "data-test", "data-testid", "name"]:
             if attr in attrs and attrs[attr]:
                 return attr
@@ -174,75 +172,11 @@ class FluentLocatorStrategy(LocatorStrategy):
 class FluentActionRecognizer(ActionRecognizer):
     """Fluent: DOM 操作 → 返回 this 的链式方法，含 buffer 聚合"""
 
-    def aggregate(self, raw_steps: list, page_context: dict) -> list:
-        actions = []
-        buffer = []
-        current_type = None
+    def _composite_action_type(self) -> str:
+        return "fluent_action"
 
-        for step in raw_steps:
-            if isinstance(step, dict):
-                step_type = step.get("action", "")
-            else:
-                step_type = step.action.value if hasattr(step.action, "value") else str(step.action)
-
-            if step_type == "navigate":
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                current_type = "navigation"
-                buffer.append(step)
-            elif step_type in ("input", "fill"):
-                if current_type == "click":
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = "input"
-            elif step_type == "click":
-                if current_type == "input":
-                    buffer.append(step)
-                else:
-                    if buffer:
-                        actions.append(self._aggregate_buffer(buffer, current_type))
-                        buffer = []
-                    buffer.append(step)
-                current_type = "click"
-            else:
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = step_type
-
-        if buffer:
-            actions.append(self._aggregate_buffer(buffer, current_type))
-        return actions
-
-    def _aggregate_buffer(self, buffer: list, action_type: str) -> dict:
-        if not buffer:
-            return {}
-        first = buffer[0]
-        target_label = ""
-        target_tag = ""
-        value = ""
-        if isinstance(first, dict):
-            t = first.get("target", {})
-            if isinstance(t, dict):
-                target_label = t.get("label", "")
-                target_tag = t.get("tag", "")
-            value = first.get("value", "")
-        elif hasattr(first, 'target') and first.target:
-            target_label = first.target.label or ""
-            target_tag = first.target.tag or ""
-            value = getattr(first, 'value', '') or ''
-
-        base = {
-            "raw_steps": list(buffer),
-            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
-            "value": value,
-        }
-        if action_type == "input" and len(buffer) >= 2:
-            return {**base, "type": "composite_action", "action": "fillAndSubmit", "steps": len(buffer)}
-        return {**base, "type": "fluent_action", "action": action_type, "steps": len(buffer)}
+    def _single_action_type(self) -> str:
+        return "fluent_action"
 
 
 
@@ -250,96 +184,42 @@ class FluentCodeGenerator(CodeGenerator):
     """生成 Fluent API + PageFactory + AssertJ 风格"""
     target_language = "java"
     default_base_class = "PageElement"
+    DEFAULT_PACKAGE = "com.fluent"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
+        self.kb_manager = kb_manager
+        self.project_root = str(kb_manager.project_root) if kb_manager and hasattr(kb_manager, 'project_root') else ""
         if package_name is not None:
             self.package = package_name
         else:
-            pkg = self._resolve_package()
+            pkg = resolve_package(self.project_root, self.kb_manager, self.DEFAULT_PACKAGE)
             if pkg is None:
-                self.package = "com.fluent"
+                self.package = self.DEFAULT_PACKAGE
             else:
                 self.package = pkg
 
-    def _resolve_package(self) -> Optional[str]:
-        packages: set[str] = set()
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "package" in item.key:
-                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
-                    if pkg:
-                        packages.add(pkg)
-            if not packages:
-                for item in self.kb.store.list_category("components"):
-                    key = item.key
-                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
-                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
-                        if len(pkg_parts) > 1:
-                            packages.add(pkg_parts[0])
-            if packages:
-                parts_list = [p.split(".") for p in packages]
-                common = parts_list[0]
-                for p in parts_list[1:]:
-                    i = 0
-                    while i < min(len(common), len(p)) and common[i] == p[i]:
-                        i += 1
-                    common = common[:i]
-                if common:
-                    return ".".join(common)
-
-        if self.kb and hasattr(self.kb, 'project_root'):
-            result = scan_java_source_for_package(str(self.kb.project_root))
-            if result is not None:
-                return result
-
-        return None
-
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
-        template = _JINJA_ENV.from_string(FLUENT_ELEMENT_TEMPLATE)
+        template = JINJA_ENV.from_string(FLUENT_ELEMENT_TEMPLATE)
         return post_process_java_code(template.render(comp=comp_def, package=self.package), self.package)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        template = _JINJA_ENV.from_string(FLUENT_PAGE_TEMPLATE)
+        template = JINJA_ENV.from_string(FLUENT_PAGE_TEMPLATE)
         return post_process_java_code(template.render(baw=baw_def, package=self.package), self.package)
 
-    def generate_test_script(self, script_def: ScriptDef) -> str:
-        template = _JINJA_ENV.from_string(FLUENT_TEST_TEMPLATE)
+    def generate_test_script(self, script_def: ScriptDef,
+                             template_path: str = "") -> str:
+        template = JINJA_ENV.from_string(FLUENT_TEST_TEMPLATE)
         return post_process_java_code(template.render(s=script_def, package=self.package), self.package)
 
-    def generate_test_data(self, data_def: TestDataDef) -> str:
-        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(FLUENT_DATA_BUILDER_TEMPLATE)
+    def generate_test_data(self, data_def: TestDataDef,
+                           template_path: str = "") -> str:
+        JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = JINJA_ENV.from_string(FLUENT_DATA_BUILDER_TEMPLATE)
         return post_process_java_code(template.render(d=data_def, package=self.package), self.package)
 
-    def get_import_style(self) -> ImportStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "import_style" in item.key:
-                    examples = item.value.get("examples", [])
-                    return ImportStyle(
-                        from_imports=examples + [
-                            f"import {self.package}.pages.HomePage;",
-                        ],
-                        direct_imports=[
-                            "import org.testng.annotations.Test;",
-                            "import org.testng.annotations.BeforeMethod;",
-                            "import org.openqa.selenium.WebDriver;",
-                            "import static org.assertj.core.api.Assertions.assertThat;",
-                        ],
-                    )
-        return ImportStyle(
-            from_imports=[f"import {self.package}.pages.HomePage;"],
-            direct_imports=[
-                "import org.testng.annotations.Test;",
-                "import org.testng.annotations.BeforeMethod;",
-                "import org.openqa.selenium.WebDriver;",
-                "import static org.assertj.core.api.Assertions.assertThat;",
-            ],
-        )
-
-    def get_assertion_style(self) -> AssertionStyle:
-        return AssertionStyle(type="assertj")
+    def _default_assertion_style(self) -> str:
+        return "assertj"
 
     def render_step(self, step) -> str:
         """Java Fluent 风格步骤渲染"""
@@ -399,43 +279,20 @@ class FluentCodeGenerator(CodeGenerator):
 
 class FluentDataFormatter(DataFormatter):
     """Fluent: Builder 模式而不是常量类"""
+    DEFAULT_PACKAGE = "com.fluent"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
+        self.kb_manager = kb_manager
+        self.project_root = str(kb_manager.project_root) if kb_manager and hasattr(kb_manager, 'project_root') else ""
         if package_name is not None:
             self.package = package_name
         else:
-            pkg = self._resolve_package()
+            pkg = resolve_package(self.project_root, self.kb_manager, self.DEFAULT_PACKAGE)
             if pkg is None:
-                self.package = "com.fluent"
+                self.package = self.DEFAULT_PACKAGE
             else:
                 self.package = pkg
-
-    def _resolve_package(self) -> Optional[str]:
-        packages: set[str] = set()
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "package" in item.key:
-                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
-                    if pkg:
-                        packages.add(pkg)
-            if packages:
-                parts_list = [p.split(".") for p in packages]
-                common = parts_list[0]
-                for p in parts_list[1:]:
-                    i = 0
-                    while i < min(len(common), len(p)) and common[i] == p[i]:
-                        i += 1
-                    common = common[:i]
-                if common:
-                    return ".".join(common)
-
-        if self.kb and hasattr(self.kb, 'project_root'):
-            result = scan_java_source_for_package(str(self.kb.project_root))
-            if result is not None:
-                return result
-
-        return None
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
         domain = data_context.get("domain", "unknown")

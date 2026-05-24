@@ -1,11 +1,11 @@
 """uibridge — UI自动化测试脚本智能化自动生成系统"""
-__version__ = "0.3.2"
+__version__ = "0.3.5"
 
 
 def check_browser_available(browser_name: str = "chromium") -> tuple[bool, str]:
     """检查 Playwright 浏览器是否已安装。
 
-    在 ms-playwright 目录下查找已安装的浏览器，不触发下载。
+    验证 Playwright 注册表中浏览器路径对应的文件确实存在。
 
     Returns:
         (available, path_or_error): available 为 True 时第二个元素是浏览器路径，
@@ -20,8 +20,10 @@ def check_browser_available(browser_name: str = "chromium") -> tuple[bool, str]:
             if browser_type is None:
                 return False, f"未知浏览器类型: {browser_name}"
             path = browser_type.executable_path
-            if path:
+            if path and Path(path).exists():
                 return True, str(path)
+            if path:
+                return False, f"浏览器注册表指向不存在的路径: {path}（运行 playwright install {browser_name}）"
             return False, "浏览器未安装"
         finally:
             pw.stop()

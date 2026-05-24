@@ -7,15 +7,15 @@ Component AW → Business AW → Test Data → Test Scripts
 import re
 from pathlib import Path
 from typing import Optional
+import logging
 
-from jinja2 import Environment, BaseLoader
+logger = logging.getLogger(__name__)
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
     MethodTemplate, ComponentDef, PageComponent, PageDef,
     BAWDef, BAWOperationDef, CallDef,
-    ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
     scan_java_source_for_package,
     sanitize_identifier,
@@ -23,10 +23,10 @@ from .base import (
     to_java_class_name,
     post_process_java_code,
     format_action_params,
+    extract_domain,
+    JINJA_ENV,
+    resolve_package,
 )
-
-_JINJA_ENV = Environment(loader=BaseLoader())
-_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -150,7 +150,7 @@ class PlaywrightComponentResolver(ComponentResolver):
         return tag_map.get(tag, "BaseComponentAW")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
-        domain = self._extract_domain(url)
+        domain = extract_domain(url)
         data_module = dom_attrs.get("data-module", "")
         if data_module:
             return to_java_class_name(data_module)
@@ -175,13 +175,6 @@ class PlaywrightComponentResolver(ComponentResolver):
             return "DialogAW"
         return self.ARIA_MAP.get(aria_role, "BaseComponentAW")
 
-    def _extract_domain(self, url: str) -> str:
-        match = _DOMAIN_RE.search(url)
-        if match:
-            return match.group(1)
-        parts = url.rstrip("/").split("/")
-        return parts[-1] if parts else "unknown"
-
 
 # ═══════════════════════════════════════════════════════════════
 # PlaywrightLocatorStrategy
@@ -197,11 +190,11 @@ class PlaywrightLocatorStrategy(LocatorStrategy):
         attrs = element_info.attrs
 
         # 1. 向上查找最近的 data-module 祖先
-        for ancestor in element_info.ancestor_chain:
-            anc_attrs = ancestor.get("attrs", {})
-            if "data-module" in anc_attrs:
-                module = anc_attrs["data-module"]
-                best = self._best_attr(attrs)
+        for selector in self._build_ancestor_chain(element_info, max_depth=3):
+            m = re.search(r"data-module='([^']+)'", selector)
+            if m:
+                module = m.group(1)
+                best = self.best_attr(element_info)
                 if best and attrs.get(best):
                     return f"[data-module='{module}'] [{best}='{attrs[best]}']"
                 return f"[data-module='{module}']"
@@ -238,7 +231,9 @@ class PlaywrightLocatorStrategy(LocatorStrategy):
 
         return ""
 
-    def _best_attr(self, attrs: dict) -> str:
+    def best_attr(self, element) -> str:
+        """Return best attribute name for Playwright locator construction."""
+        attrs = element.attributes if hasattr(element, 'attributes') else element.attrs
         for attr in ["data-testid", "id", "name", "placeholder", "aria-label"]:
             if attr in attrs and attrs[attr]:
                 return attr
@@ -268,76 +263,6 @@ class PlaywrightLocatorStrategy(LocatorStrategy):
 class PlaywrightActionRecognizer(ActionRecognizer):
     """DOM 操作序列 → Playwright 方法调用聚合"""
 
-    def aggregate(self, raw_steps: list, page_context: dict) -> list:
-        actions = []
-        buffer = []
-        current_type = None
-
-        for step in raw_steps:
-            if isinstance(step, dict):
-                step_type = step.get("action", "")
-            else:
-                step_type = step.action.value if hasattr(step.action, "value") else str(step.action)
-
-            if step_type == "navigate":
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                current_type = "navigation"
-                buffer.append(step)
-            elif step_type in ("input", "fill"):
-                if current_type == "click":
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = "input"
-            elif step_type == "click":
-                if current_type == "input":
-                    buffer.append(step)
-                else:
-                    if buffer:
-                        actions.append(self._aggregate_buffer(buffer, current_type))
-                        buffer = []
-                    buffer.append(step)
-                current_type = "click"
-            else:
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = step_type
-
-        if buffer:
-            actions.append(self._aggregate_buffer(buffer, current_type))
-        return actions
-
-    def _aggregate_buffer(self, buffer: list, action_type: str) -> dict:
-        if not buffer:
-            return {}
-        first = buffer[0]
-        target_label = ""
-        target_tag = ""
-        value = ""
-        if isinstance(first, dict):
-            t = first.get("target", {})
-            if isinstance(t, dict):
-                target_label = t.get("label", "")
-                target_tag = t.get("tag", "")
-            value = first.get("value", "")
-        elif hasattr(first, 'target') and first.target:
-            target_label = first.target.label or ""
-            target_tag = first.target.tag or ""
-            value = getattr(first, 'value', '') or ''
-
-        base = {
-            "raw_steps": list(buffer),
-            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
-            "value": value,
-        }
-        if action_type == "input" and len(buffer) >= 2:
-            return {**base, "type": "composite_action", "action": "fillAndSubmit", "steps": len(buffer)}
-        return {**base, "type": "single_action", "action": action_type, "steps": len(buffer)}
-
     def recognize_pattern(self, sequences: list) -> list[dict]:
         patterns = super().recognize_pattern(sequences)
         for p in patterns:
@@ -353,94 +278,47 @@ class PlaywrightCodeGenerator(CodeGenerator):
     """生成 Playwright + Java + TestNG 风格代码，融入四层分层架构"""
     target_language = "java"
     default_base_class = "BaseComponentAW"
+    DEFAULT_PACKAGE = "com.enterprise.test"
+    DEFAULT_BASE_PAGE = "BasePage"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None,
-                 base_page_class: str = "BasePage", test_framework: str = "testng"):
+                 base_page_class: str = DEFAULT_BASE_PAGE, test_framework: str = "testng"):
         self.kb = kb_manager
+        self.kb_manager = kb_manager
+        self.project_root = str(kb_manager.project_root) if kb_manager and hasattr(kb_manager, 'project_root') else ""
         if package_name is not None:
             self.package = package_name
         else:
-            pkg = self._resolve_package()
-            self.package = pkg if pkg is not None else "com.enterprise.test"
+            pkg = resolve_package(self.project_root, self.kb_manager, self.DEFAULT_PACKAGE)
+            self.package = pkg if pkg is not None else self.DEFAULT_PACKAGE
         self.base_page = base_page_class
         self.test_framework = test_framework
-
-    def _resolve_package(self) -> Optional[str]:
-        packages: set[str] = set()
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "package" in item.key:
-                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
-                    if pkg:
-                        packages.add(pkg)
-            if not packages:
-                for item in self.kb.store.list_category("components"):
-                    key = item.key
-                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
-                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
-                        if len(pkg_parts) > 1:
-                            packages.add(pkg_parts[0])
-            if packages:
-                parts_list = [p.split(".") for p in packages]
-                common = parts_list[0]
-                for p in parts_list[1:]:
-                    i = 0
-                    while i < min(len(common), len(p)) and common[i] == p[i]:
-                        i += 1
-                    common = common[:i]
-                if common:
-                    return ".".join(common)
-        if self.kb and hasattr(self.kb, 'project_root'):
-            result = scan_java_source_for_package(str(self.kb.project_root))
-            if result is not None:
-                return result
-        return None
 
     # ── 四个生成方法 ──────────────────────────
 
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
-        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(PLAYWRIGHT_COMPONENT_TEMPLATE)
+        JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = JINJA_ENV.from_string(PLAYWRIGHT_COMPONENT_TEMPLATE)
         return post_process_java_code(template.render(comp=comp_def, package=self.package), self.package)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        template = _JINJA_ENV.from_string(PLAYWRIGHT_PAGE_TEMPLATE)
+        template = JINJA_ENV.from_string(PLAYWRIGHT_PAGE_TEMPLATE)
         return post_process_java_code(template.render(baw=baw_def, package=self.package), self.package)
 
-    def generate_test_script(self, script_def: ScriptDef) -> str:
-        template = _JINJA_ENV.from_string(PLAYWRIGHT_TESTNG_TEMPLATE)
+    def generate_test_script(self, script_def: ScriptDef,
+                             template_path: str = "") -> str:
+        template = JINJA_ENV.from_string(PLAYWRIGHT_TESTNG_TEMPLATE)
         return post_process_java_code(template.render(s=script_def, package=self.package,
                                                   framework=self.test_framework), self.package)
 
-    def generate_test_data(self, data_def: TestDataDef) -> str:
-        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(PLAYWRIGHT_TEST_DATA_TEMPLATE)
+    def generate_test_data(self, data_def: TestDataDef,
+                           template_path: str = "") -> str:
+        JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = JINJA_ENV.from_string(PLAYWRIGHT_TEST_DATA_TEMPLATE)
         return post_process_java_code(template.render(d=data_def, package=self.package), self.package)
 
-    def get_import_style(self) -> ImportStyle:
-        test_imports = [
-            "import org.testng.annotations.Test;",
-            "import org.testng.annotations.BeforeMethod;",
-        ]
-        assert_import = "import org.testng.Assert;"
-
-        return ImportStyle(
-            from_imports=[
-                f"import {self.package}.pages.*;",
-                f"import {self.package}.components.*;",
-                f"import {self.package}.business.*;",
-            ],
-            direct_imports=[
-                f"import {self.package}.tests.BaseTest;",
-                "import com.microsoft.playwright.Page;",
-                "import com.microsoft.playwright.Locator;",
-                *test_imports,
-                assert_import,
-            ],
-        )
-
-    def get_assertion_style(self) -> AssertionStyle:
-        return AssertionStyle(type="testng_assert")
+    def _default_assertion_style(self) -> str:
+        return "testng_assert"
 
     def render_step(self, step) -> str:
         """Playwright Java 风格步骤渲染"""
@@ -491,11 +369,6 @@ class PlaywrightCodeGenerator(CodeGenerator):
         else:
             return f'Assert.assertNotNull(page); // TODO: assert {candidate}'
 
-        comment = getattr(step, 'comment', '')
-        if comment:
-            return f"// {comment}"
-        return ""
-
 
 # ═══════════════════════════════════════════════════════════════
 # PlaywrightDataFormatter
@@ -503,38 +376,17 @@ class PlaywrightCodeGenerator(CodeGenerator):
 
 class PlaywrightDataFormatter(DataFormatter):
     """录制值 → Java TestNG DataProvider 测试数据类"""
+    DEFAULT_PACKAGE = "com.enterprise.test"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
+        self.kb_manager = kb_manager
+        self.project_root = str(kb_manager.project_root) if kb_manager and hasattr(kb_manager, 'project_root') else ""
         if package_name is not None:
             self.package = package_name
         else:
-            pkg = self._resolve_package()
-            self.package = pkg if pkg is not None else "com.enterprise.test"
-
-    def _resolve_package(self) -> Optional[str]:
-        packages: set[str] = set()
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "package" in item.key:
-                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
-                    if pkg:
-                        packages.add(pkg)
-            if packages:
-                parts_list = [p.split(".") for p in packages]
-                common = parts_list[0]
-                for p in parts_list[1:]:
-                    i = 0
-                    while i < min(len(common), len(p)) and common[i] == p[i]:
-                        i += 1
-                    common = common[:i]
-                if common:
-                    return ".".join(common)
-        if self.kb and hasattr(self.kb, 'project_root'):
-            result = scan_java_source_for_package(str(self.kb.project_root))
-            if result is not None:
-                return result
-        return None
+            pkg = resolve_package(self.project_root, self.kb_manager, self.DEFAULT_PACKAGE)
+            self.package = pkg if pkg is not None else self.DEFAULT_PACKAGE
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
         domain = data_context.get("domain", "unknown")

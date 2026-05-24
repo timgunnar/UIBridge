@@ -1,5 +1,9 @@
 """组件 AW 生成器"""
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from ..adapter.base import ComponentDef, MethodTemplate, CodeGenerator, ComponentResolver, sanitize_identifier
 
 

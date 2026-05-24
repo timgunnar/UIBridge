@@ -139,11 +139,13 @@ class TestJavaTestNGAdapter:
         """Java import 风格"""
         style = self.generator.get_import_style()
         assert style is not None
+        assert isinstance(style, str) and len(style) > 0
 
     def test_stage5_java_assertion_style(self):
         """Java 断言风格"""
         style = self.generator.get_assertion_style()
         assert style is not None
+        assert isinstance(style, str) and len(style) > 0
 
     def test_stage5_java_page_generation(self):
         """生成 Java Page Object"""
@@ -267,11 +269,13 @@ class TestJavaFluentAdapter:
         """Fluent import 风格"""
         style = self.generator.get_import_style()
         assert style is not None
+        assert isinstance(style, str) and len(style) > 0
 
     def test_stage5_fluent_assertion_style(self):
         """Fluent 断言风格 (AssertJ)"""
         style = self.generator.get_assertion_style()
         assert style is not None
+        assert isinstance(style, str) and len(style) > 0
 
 
 # ═══════════════════════════════════════════════════════════════

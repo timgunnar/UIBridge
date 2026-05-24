@@ -7,6 +7,9 @@ import time
 import os
 from pathlib import Path
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

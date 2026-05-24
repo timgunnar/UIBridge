@@ -112,17 +112,27 @@ Agent：调用 diff_snapshots → 列出差异
 
 ### 知识库自动集成
 
-uibridge 从你的源码中学习框架约定，生成代码自动使用正确的包名和 import：
+uibridge 将项目知识分为两层管理，由不同组件独立负责：
+
+| 层次 | 管理者 | 存储 | 内容 | 更新方式 |
+|------|--------|------|------|---------|
+| 框架画像 | ProfileManager | `.uibridge/profile.yaml` | 项目结构（UI 包路径、基类体系、定位器优先级） | `seed_knowledge_base` Phase 1 |
+| 知识条目 | KBManager | `.uibridge/kb/` | 运行时发现的组件约定、模式（聚合后的 KBItems） | `seed_knowledge_base` Phase 2 |
+
+**ProfileManager 独立管理框架画像**，不再通过 KBManager 的 profile 方法操作。画像持久化到 `.uibridge/profile.yaml`，带 TTL 缓存。画像作为项目结构的单一事实来源，KB 存储运行时发现的组件使用模式。
+
+`seed_knowledge_base` 执行两阶段流程：
 
 ```
-KB 扫描发现: package com.enterprise, 组件 WebButton
+Phase 1: ProfileManager 扫描项目 → 建立/更新 .uibridge/profile.yaml (UI 包、基类、定位器优先级)
+Phase 2: 基于画像过滤 → 只扫描 UI 文件，按组件族聚合 → 生成聚合 KBItems → 写入 .uibridge/kb/
   ↓
 生成代码:
   package com.enterprise.tests;              // 不是硬编码的 com.acme.tests
   import com.enterprise.components.WebButton; // 不是 com.acme.components.WebButton
 ```
 
-详见 [知识库维护指南](kb-maintenance-guide.md)。
+详见 [知识库维护指南](kb-maintenance-guide.md) 和 [框架画像维护指南](profile-maintenance-guide.md)。
 
 ---
 

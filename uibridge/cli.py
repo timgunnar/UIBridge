@@ -11,8 +11,20 @@ from playwright.sync_api import sync_playwright
 from .pipeline import Pipeline
 from .adapter.loader import load_adapter
 from .kb.kb_manager import KBManager
+from .profile_manager import ProfileManager
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_browser_or_die():
+    """验证 Chromium 浏览器可用，不可用时打印错误并退出"""
+    from . import check_browser_available
+    available, info = check_browser_available("chromium")
+    if not available:
+        click.echo(f"[ERROR] 浏览器不可用: {info}", err=True)
+        click.echo("请运行: playwright install chromium", err=True)
+        import sys
+        sys.exit(1)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -20,7 +32,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.3.2")
+@click.version_option(version="0.3.5")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 
@@ -32,6 +44,8 @@ def cli():
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def record(url: str, output: str, headed: bool, adapter_config: str):
     """录制浏览器操作，输出标准化录制文件"""
+    _ensure_browser_or_die()
+
     resolver, locator, recognizer, code_gen, data_fmt = load_adapter(adapter_config)
 
     with sync_playwright() as pw:
@@ -40,7 +54,10 @@ def record(url: str, output: str, headed: bool, adapter_config: str):
         page = context.new_page()
         page.goto(url)
 
-        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt, project_root=".", kb_manager=KBManager("."))
+        profile_mgr = ProfileManager(".")
+        kb_mgr = KBManager(".", profile_manager=profile_mgr)
+        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt,
+                            project_root=".", kb_manager=kb_mgr, profile_manager=profile_mgr)
         session = pipeline.record(page)
 
         click.echo("=" * 60)
@@ -117,6 +134,8 @@ def generate(input_file: str, output_dir: str, adapter_config: str):
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def analyze(url: str, adapter_config: str):
     """分析页面，发现组件并输出注册表"""
+    _ensure_browser_or_die()
+
     resolver, locator, recognizer, code_gen, data_fmt = load_adapter(adapter_config)
 
     with sync_playwright() as pw:
@@ -125,7 +144,10 @@ def analyze(url: str, adapter_config: str):
         page.goto(url)
         page.wait_for_load_state("networkidle")
 
-        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt, project_root=".", kb_manager=KBManager("."))
+        profile_mgr = ProfileManager(".")
+        kb_mgr = KBManager(".", profile_manager=profile_mgr)
+        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt,
+                            project_root=".", kb_manager=kb_mgr, profile_manager=profile_mgr)
         components = pipeline.discover_components(page)
 
         click.echo(f"\n页面: {url}")
@@ -174,28 +196,40 @@ def cleanup(yes: bool, dry_run: bool):
     - recording.json 录制文件
     - templates/ 中从 uibridge 复制的文件 (CLAUDE.md, .mcp.json, adapter.yaml)
     - .claude/skills/uibridge.md 技能文件
+    - Python 环境中可编辑安装残留（site-packages + Scripts）
 
     使用 pip uninstall uibridge 卸载 Python 包本身。
     """
     cwd = Path.cwd()
     artifacts = _scan_artifacts(cwd)
 
-    if not artifacts:
+    # 同时扫描系统级可编辑安装残留
+    system_artifacts = _scan_system_artifacts()
+
+    all_artifacts = artifacts + system_artifacts
+
+    if not all_artifacts:
         click.echo("[OK] 未发现 uibridge 残留文件。")
-        click.echo("\n卸载 Python 包: pip uninstall uibridge")
+        click.echo("卸载 Python 包: pip uninstall uibridge")
         return
 
     # 报告
-    click.echo(f"\n发现 {len(artifacts)} 项 uibridge 残留:\n")
-    for item in artifacts:
-        click.echo(f"  {item}")
+    if artifacts:
+        click.echo(f"\n项目残留 ({len(artifacts)} 项):\n")
+        for item in artifacts:
+            click.echo(f"  {item}")
+    if system_artifacts:
+        click.echo(f"\nPython 环境可编辑安装残留 ({len(system_artifacts)} 项):\n")
+        for item in system_artifacts:
+            click.echo(f"  {item}")
 
     total_size = sum(
         sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
         if p.is_dir() else p.stat().st_size
-        for p in artifacts
+        for p in all_artifacts
     )
-    click.echo(f"\n总计: ~{total_size / 1024:.1f} KB")
+    if total_size:
+        click.echo(f"\n总计: ~{total_size / 1024:.1f} KB")
 
     if dry_run:
         click.echo("\n[Dry-run] 未执行删除。使用 --yes 确认清理。")
@@ -207,7 +241,7 @@ def cleanup(yes: bool, dry_run: bool):
     # 执行清理
     import shutil
     removed = 0
-    for item in artifacts:
+    for item in all_artifacts:
         try:
             if item.is_dir():
                 shutil.rmtree(item)
@@ -219,7 +253,8 @@ def cleanup(yes: bool, dry_run: bool):
             click.echo(f"  [WARN] 删除失败: {item} ({e})")
 
     click.echo(f"\n[DONE] 已清理 {removed} 项。")
-    click.echo("卸载 Python 包: pip uninstall uibridge")
+    if not system_artifacts:
+        click.echo("卸载 Python 包: pip uninstall uibridge")
 
 
 def _scan_artifacts(cwd: Path) -> list[Path]:
@@ -259,6 +294,41 @@ def _scan_artifacts(cwd: Path) -> list[Path]:
     skill_file = cwd / ".claude" / "skills" / "uibridge.md"
     if skill_file.exists():
         artifacts.append(skill_file)
+
+    return artifacts
+
+
+def _scan_system_artifacts() -> list[Path]:
+    """扫描 Python 环境中可编辑安装遗留的 uibridge 残留文件。
+
+    pip uninstall 有时无法完全清理可编辑安装的文件，
+    导致 package 已卸载但 import 仍可用的状态。
+    """
+    artifacts = []
+
+    try:
+        import site
+        site_packages = site.getsitepackages()
+        for sp in site_packages:
+            sp_path = Path(sp)
+            if sp_path.exists():
+                for f in sp_path.glob("__editable__.*uibridge*"):
+                    artifacts.append(f)
+                for f in sp_path.glob("__editable___*uibridge*"):
+                    artifacts.append(f)
+    except Exception:
+        logger.warning("Failed to scan site-packages for editable install artifacts", exc_info=True)
+        pass
+
+    # Scripts 目录下的入口点
+    try:
+        scripts_dir = Path(sys.executable).parent / "Scripts"
+        if scripts_dir.exists():
+            for f in scripts_dir.glob("uibridge*"):
+                artifacts.append(f)
+    except Exception:
+        logger.warning("Failed to scan Scripts directory for uibridge artifacts", exc_info=True)
+        pass
 
     return artifacts
 

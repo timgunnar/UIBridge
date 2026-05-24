@@ -5,6 +5,13 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
+import logging
+
+from jinja2 import Environment, BaseLoader
+
+logger = logging.getLogger(__name__)
+
+JINJA_ENV = Environment(loader=BaseLoader())
 
 
 def scan_java_source_for_package(project_root: str) -> Optional[str]:
@@ -28,8 +35,8 @@ def scan_java_source_for_package(project_root: str) -> Optional[str]:
             if m:
                 packages.append(m.group(1))
         except Exception:
+            logger.warning("Failed to read Java source file for package scan", exc_info=True)
             pass
-
     if not packages:
         return ""  # 默认包
 
@@ -44,6 +51,37 @@ def scan_java_source_for_package(project_root: str) -> Optional[str]:
             i += 1
         common = common[:i]
     return ".".join(common) if common else max(set(packages), key=packages.count)
+
+
+def resolve_package(project_root: str, kb_manager=None, default: str = "") -> str:
+    """Resolve Java package: KB query → source scan → default fallback."""
+    if kb_manager:
+        try:
+            items = kb_manager.query("package", category="conventions")
+            if items:
+                pkg = items[0].content.get("base_package", "")
+                if pkg:
+                    return pkg
+        except Exception:
+            pass
+    scanned = scan_java_source_for_package(project_root)
+    if scanned:
+        return scanned
+    return default
+
+
+def common_package_prefix(packages: list[str]) -> str:
+    """Find longest common package prefix from a list of package names."""
+    if not packages:
+        return ""
+    parts_list = [p.split(".") for p in packages]
+    common = parts_list[0]
+    for p in parts_list[1:]:
+        i = 0
+        while i < min(len(common), len(p)) and common[i] == p[i]:
+            i += 1
+        common = common[:i]
+    return ".".join(common) if common else ""
 
 
 # ── 跨接口共享的数据类型 ──────────────────────
@@ -235,6 +273,16 @@ class ElementInfo:
     attrs: dict = field(default_factory=dict)
     text: str = ""
     ancestor_chain: list[str] = field(default_factory=list)
+    role: str = ""
+    parent: object = None
+
+    @property
+    def attributes(self) -> dict:
+        return self.attrs
+
+    @property
+    def tag_name(self) -> str:
+        return self.tag
 
 
 @dataclass
@@ -307,13 +355,136 @@ class LocatorStrategy(ABC):
                 return kb_conventions["priority"]
         return getattr(self, 'PRIORITY', ["id", "name", "css", "xpath"])
 
+    def best_attr(self, element) -> str:
+        """Default locator attribute selection — override for custom priority."""
+        for attr in self._resolve_locator_priority():
+            val = element.attributes.get(attr)
+            if val:
+                return f'{attr}="{val}"'
+        if element.text and len(element.text) < 50:
+            return f'text="{element.text}"'
+        if element.role:
+            return f'role={element.role}'
+        return f'css={element.tag_name or "div"}'
+
+    def _build_ancestor_chain(self, element, max_depth: int = 3) -> list[str]:
+        """Build ancestor selector chain for XPath construction."""
+        chain = []
+        current = getattr(element, 'parent', None)
+        depth = 0
+        while current and depth < max_depth:
+            selector = current.tag_name or "div"
+            attrs = current.attributes if hasattr(current, 'attributes') else {}
+            if attrs.get("id"):
+                selector += f'[@id="{attrs["id"]}"]'
+                chain.insert(0, selector)
+                break
+            if attrs.get("data-testid"):
+                selector += f'[@data-testid="{attrs["data-testid"]}"]'
+                chain.insert(0, selector)
+                break
+            chain.insert(0, selector)
+            current = getattr(current, 'parent', None)
+            depth += 1
+        return chain
+
 
 class ActionRecognizer(ABC):
     """接口 3: 动作识别器 — DOM 操作序列 → 业务语义"""
 
-    @abstractmethod
     def aggregate(self, raw_steps: list, page_context: dict) -> list:
-        ...
+        """Aggregate raw DOM steps into semantic actions using buffer-and-merge.
+
+        Consecutive input+click pairs are merged into composite actions.
+        Override for adapters with different aggregation logic (e.g. Screenplay).
+        """
+        actions = []
+        buffer = []
+        current_type = None
+
+        for step in raw_steps:
+            if isinstance(step, dict):
+                step_type = step.get("action", "")
+            else:
+                step_type = step.action.value if hasattr(step.action, "value") else str(step.action)
+
+            if step_type == "navigate":
+                if buffer:
+                    actions.append(self._aggregate_buffer(buffer, current_type))
+                    buffer = []
+                current_type = "navigation"
+                buffer.append(step)
+            elif step_type in ("input", "fill"):
+                if current_type == "click":
+                    actions.append(self._aggregate_buffer(buffer, current_type))
+                    buffer = []
+                buffer.append(step)
+                current_type = "input"
+            elif step_type == "click":
+                if current_type == "input":
+                    buffer.append(step)
+                else:
+                    if buffer:
+                        actions.append(self._aggregate_buffer(buffer, current_type))
+                        buffer = []
+                    buffer.append(step)
+                current_type = "click"
+            else:
+                if buffer:
+                    actions.append(self._aggregate_buffer(buffer, current_type))
+                    buffer = []
+                buffer.append(step)
+                current_type = step_type
+
+        if buffer:
+            actions.append(self._aggregate_buffer(buffer, current_type))
+        return actions
+
+    def _aggregate_buffer(self, buffer: list, action_type: str) -> dict:
+        """Merge buffered actions into a single semantic action dict.
+
+        Override _composite_action_name, _composite_action_type, and
+        _single_action_type to customize per adapter.
+        """
+        if not buffer:
+            return {}
+        first = buffer[0]
+        target_label = ""
+        target_tag = ""
+        value = ""
+        if isinstance(first, dict):
+            t = first.get("target", {})
+            if isinstance(t, dict):
+                target_label = t.get("label", "")
+                target_tag = t.get("tag", "")
+            value = first.get("value", "")
+        elif hasattr(first, 'target') and first.target:
+            target_label = first.target.label or ""
+            target_tag = first.target.tag or ""
+            value = getattr(first, 'value', '') or ''
+
+        base = {
+            "raw_steps": list(buffer),
+            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
+            "value": value,
+        }
+        if action_type == "input" and len(buffer) >= 2:
+            return {**base, "type": self._composite_action_type(),
+                    "action": self._composite_action_name(), "steps": len(buffer)}
+        return {**base, "type": self._single_action_type(),
+                "action": action_type, "steps": len(buffer)}
+
+    def _composite_action_name(self) -> str:
+        """Override in subclass for adapter-specific composite action name."""
+        return "fillAndSubmit"
+
+    def _composite_action_type(self) -> str:
+        """Override in subclass for adapter-specific composite action type."""
+        return "composite_action"
+
+    def _single_action_type(self) -> str:
+        """Override in subclass for adapter-specific single action type."""
+        return "single_action"
 
     def _match_kb_patterns(self, actions: list, kb_manager=None) -> list:
         """Match action sequences against KB patterns, merge recognized sub-sequences."""
@@ -323,6 +494,7 @@ class ActionRecognizer(ABC):
         try:
             patterns = kb_manager.store.list_category("patterns")
         except Exception:
+            logger.warning("Failed to query KB patterns, returning actions unmodified", exc_info=True)
             return actions
         if not patterns:
             return actions
@@ -420,20 +592,67 @@ class CodeGenerator(ABC):
         ...
 
     @abstractmethod
-    def generate_test_script(self, script_def: ScriptDef) -> str:
+    def generate_test_script(self, script_def: ScriptDef,
+                             template_path: str = "") -> str:
         ...
 
     @abstractmethod
-    def generate_test_data(self, data_def: TestDataDef) -> str:
+    def generate_test_data(self, data_def: TestDataDef,
+                           template_path: str = "") -> str:
         ...
 
-    @abstractmethod
-    def get_import_style(self) -> ImportStyle:
-        ...
+    def generate(self, def_obj, layer_config: dict) -> str:
+        """Generic layer-driven code generation dispatch.
 
-    @abstractmethod
-    def get_assertion_style(self) -> AssertionStyle:
-        ...
+        Maps layer_config['maps_to'] to the appropriate generation method.
+        Override in adapter subclasses to support custom layer types.
+        """
+        maps_to = layer_config.get("maps_to", "") if layer_config else ""
+        template_path = (layer_config or {}).get("template", "")
+
+        if maps_to == "test_script":
+            return self.generate_test_script(def_obj, template_path=template_path)
+        elif maps_to == "test_data":
+            return self.generate_test_data(def_obj, template_path=template_path)
+        elif maps_to == "component_aw":
+            return self.generate_component_aw(def_obj)
+        elif maps_to == "business_aw":
+            return self.generate_business_aw(def_obj)
+        else:
+            raise ValueError(
+                f"Unknown layer maps_to: {maps_to!r}. "
+                f"Supported: test_script, test_data, component_aw, business_aw"
+            )
+
+    def get_import_style(self, kb_manager=None) -> str:
+        """Query KB for import style, fall back to adapter default."""
+        if kb_manager:
+            try:
+                items = kb_manager.query("import_style", category="conventions")
+                if items and items[0].content.get("style"):
+                    return items[0].content["style"]
+            except Exception:
+                logger.warning("Failed to query KB for import_style", exc_info=True)
+        return self._default_import_style()
+
+    def _default_import_style(self) -> str:
+        """Override in subclass for adapter-specific default."""
+        return "standard"
+
+    def get_assertion_style(self, kb_manager=None) -> str:
+        """Query KB for assertion style, fall back to adapter default."""
+        if kb_manager:
+            try:
+                items = kb_manager.query("assertion_style", category="conventions")
+                if items and items[0].content.get("style"):
+                    return items[0].content["style"]
+            except Exception:
+                logger.warning("Failed to query KB for assertion_style", exc_info=True)
+        return self._default_assertion_style()
+
+    def _default_assertion_style(self) -> str:
+        """Override in subclass for adapter-specific default."""
+        return "assert"
 
     @abstractmethod
     def render_step(self, step) -> str:
@@ -496,3 +715,14 @@ class _PrefixSpan:
                     projected.append(seq[i + 1:])
                     break
         return projected
+
+
+_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
+
+
+def extract_domain(url: str) -> str:
+    """Extract business domain name from URL path pattern."""
+    if not url:
+        return ""
+    m = _DOMAIN_RE.search(url)
+    return m.group(1).capitalize() if m else ""

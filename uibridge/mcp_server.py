@@ -9,11 +9,19 @@
 import asyncio
 import concurrent.futures
 import json
+import logging
 import sys
 import threading
 import uuid
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# ── 超时与阈值常量 ──────────────────────────────────────
+OPEN_BROWSER_TIMEOUT = 1800  # 打开浏览器后等待开始录制的最长时间（秒）
+RECORDING_TIMEOUT = 600       # 录制会话的最长时间（秒）
+MAX_RECORDING_STEPS = 200     # MCP 模式下允许的最大录制步骤数
 
 # 将 editable finders 提升到 meta_path 最前面，
 # 防止 CWD 下同名目录被 PathFinder 优先匹配为命名空间包。
@@ -96,10 +104,13 @@ def _load_adapter(adapter_config_path: Optional[str] = None):
 
 def _build_pipeline(adapter_config_path: Optional[str] = None, project_dir: str = "."):
     from uibridge.pipeline import Pipeline
+    from uibridge.profile_manager import ProfileManager
     from uibridge.kb.kb_manager import KBManager
     resolver, locator, recognizer, code_gen, data_fmt = _load_adapter(adapter_config_path)
-    kb = KBManager(project_dir)
-    return Pipeline(resolver, locator, recognizer, code_gen, data_fmt, project_root=project_dir, kb_manager=kb)
+    profile_mgr = ProfileManager(project_dir)
+    kb = KBManager(project_dir, profile_manager=profile_mgr)
+    return Pipeline(resolver, locator, recognizer, code_gen, data_fmt,
+                    project_root=project_dir, kb_manager=kb, profile_manager=profile_mgr)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -118,6 +129,10 @@ async def analyze_page(
     """
 
     _validate_url(url)
+
+    available, path_or_error = check_browser_available("chromium")
+    if not available:
+        return json.dumps({"error": f"浏览器不可用: {path_or_error}"}, indent=2, ensure_ascii=False)
 
     def _sync():
         from playwright.sync_api import sync_playwright
@@ -139,11 +154,13 @@ async def analyze_page(
                 try:
                     browser.close()
                 except Exception:
+                    logger.warning("Failed to close browser in discover_components cleanup", exc_info=True)
                     pass
             if pw:
                 try:
                     pw.stop()
                 except Exception:
+                    logger.warning("Failed to stop playwright in discover_components cleanup", exc_info=True)
                     pass
 
     return await _run_pw(_sync)
@@ -168,6 +185,11 @@ async def open_browser(
     """
     _validate_url(url)
 
+    # 预检浏览器是否可用
+    available, path_or_error = check_browser_available("chromium")
+    if not available:
+        return json.dumps({"error": f"浏览器不可用: {path_or_error}"}, indent=2, ensure_ascii=False)
+
     def _sync():
         global _active_browser_staging, _active_recording
         from playwright.sync_api import sync_playwright
@@ -185,10 +207,12 @@ async def open_browser(
                     try:
                         _active_browser_staging["context"].close()
                     except Exception:
+                        logger.warning("Failed to close existing staging browser context", exc_info=True)
                         pass
                     try:
                         _active_browser_staging["pw"].stop()
                     except Exception:
+                        logger.warning("Failed to stop existing staging playwright", exc_info=True)
                         pass
 
                 pw = sync_playwright().start()
@@ -240,14 +264,16 @@ async def open_browser(
                             try:
                                 _active_browser_staging["context"].close()
                             except Exception:
+                                logger.warning("Failed to close staging browser context on auto-cleanup", exc_info=True)
                                 pass
                             try:
                                 _active_browser_staging["pw"].stop()
                             except Exception:
+                                logger.warning("Failed to stop staging playwright on auto-cleanup", exc_info=True)
                                 pass
                             _active_browser_staging = None
 
-                timer = threading.Timer(1800, _auto_cleanup_staging)
+                timer = threading.Timer(OPEN_BROWSER_TIMEOUT, _auto_cleanup_staging)
                 timer.daemon = True
                 timer.start()
 
@@ -270,11 +296,13 @@ async def open_browser(
                 try:
                     context.close()
                 except Exception:
+                    logger.warning("Failed to close browser context on error", exc_info=True)
                     pass
             if pw:
                 try:
                     pw.stop()
                 except Exception:
+                    logger.warning("Failed to stop playwright on error", exc_info=True)
                     pass
             with _recording_lock:
                 _active_browser_staging = None
@@ -316,6 +344,7 @@ async def start_recording(
                     if priority:
                         locator_attrs = priority[:5]  # Top 5 定位器属性
             except Exception:
+                logger.warning("Failed to get locator conventions from KB", exc_info=True)
                 pass
 
         try:
@@ -334,6 +363,7 @@ async def start_recording(
                     try:
                         staging_timer.cancel()
                     except Exception:
+                        logger.warning("Failed to cancel staging timeout timer", exc_info=True)
                         pass
                 _active_browser_staging = None
 
@@ -348,20 +378,23 @@ async def start_recording(
                             try:
                                 _active_recording["session"].stop()
                             except Exception:
+                                logger.warning("Failed to stop recording session on auto-stop", exc_info=True)
                                 pass
                             try:
                                 _active_recording["context"].close()
                             except Exception:
+                                logger.warning("Failed to close browser context on auto-stop", exc_info=True)
                                 pass
                             try:
                                 _active_recording["pw"].stop()
                             except Exception:
+                                logger.warning("Failed to stop playwright on auto-stop", exc_info=True)
                                 pass
                             if _active_recording.get("_timeout_timer"):
                                 _active_recording["_timeout_timer"].cancel()
                             _active_recording = None
 
-                timer = threading.Timer(600, _auto_stop)
+                timer = threading.Timer(RECORDING_TIMEOUT, _auto_stop)
                 timer.daemon = True
                 timer.start()
 
@@ -381,6 +414,7 @@ async def start_recording(
                 "hint": "录制中。用户在浏览器中操作，完成后 Agent 调用 stop_recording。",
             }, indent=2, ensure_ascii=False)
         except Exception:
+            logger.warning("Failed to start recording session", exc_info=True)
             with _recording_lock:
                 _active_browser_staging = None
                 _active_recording = None
@@ -418,6 +452,7 @@ async def stop_recording(
                 try:
                     timer.cancel()
                 except Exception:
+                    logger.warning("Failed to cancel recording timeout timer", exc_info=True)
                     pass
 
             session = _active_recording["session"]
@@ -432,16 +467,19 @@ async def stop_recording(
             try:
                 page.wait_for_timeout(300)
             except Exception:
+                logger.warning("Failed to flush callbacks before stopping recording", exc_info=True)
                 pass
             recording = session.stop()
         finally:
             try:
                 context.close()
             except Exception:
+                logger.warning("Failed to close browser context after stopping recording", exc_info=True)
                 pass
             try:
                 pw.stop()
             except Exception:
+                logger.warning("Failed to stop playwright after stopping recording", exc_info=True)
                 pass
 
         if recording is None:
@@ -500,9 +538,8 @@ async def generate_test_code(
     recording = RawRecording.from_dict(data)
 
     # 大规模录制保护：超过阈值时返回提示而非直接超时
-    LARGE_RECORDING_THRESHOLD = 200
     actionable_steps = [s for s in recording.steps if s.action.value not in ("mutation",)]
-    if len(actionable_steps) > LARGE_RECORDING_THRESHOLD:
+    if len(actionable_steps) > MAX_RECORDING_STEPS:
         return json.dumps({
             "warning": f"录制包含 {len(actionable_steps)} 个有效步骤（共 {len(recording.steps)} 个事件），"
                        f"MCP 模式下可能超时。",
@@ -545,6 +582,7 @@ async def generate_test_code(
                     pipeline.kb_manager.store.save(item)
                     pattern_count += 1
         except Exception:
+            logger.warning("Failed to save auto-mined pattern to KB", exc_info=True)
             pass
 
     out_dir = _sanitize_output_path(output_dir)
@@ -711,10 +749,10 @@ def _startup_check():
 
     available, info = check_browser_available("chromium")
     if available:
-        print(f"[uibridge] Playwright 浏览器已就绪: {info}", file=sys.stderr)
+        logger.info(f"Playwright 浏览器已就绪: {info}")
     else:
-        print(f"[uibridge] Playwright 浏览器未就绪: {info}", file=sys.stderr)
-        print("[uibridge] 请运行: playwright install chromium", file=sys.stderr)
+        logger.warning(f"Playwright 浏览器未就绪: {info}")
+        logger.warning("请运行: playwright install chromium")
 
     # 检查 ffmpeg (录屏依赖，可选)
     available_ff, ff_info = check_browser_available("firefox")

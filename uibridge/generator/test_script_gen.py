@@ -1,5 +1,9 @@
 """测试脚本生成器"""
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from ..adapter.base import ScriptDef, CodeGenerator, TestDataDef, DataFormatter
 
 
@@ -13,7 +17,8 @@ class TestScriptGenerator:
     def generate(self, test_name: str, imports: list[str],
                  fixtures: list[str], steps: list[str],
                  description: str = "",
-                 style_profile=None) -> str:
+                 style_profile=None,
+                 template_path: str = "") -> str:
         script_def = ScriptDef(
             class_name=self._to_class_name(test_name),
             test_name=test_name,
@@ -22,7 +27,8 @@ class TestScriptGenerator:
             fixtures=list(fixtures),
             steps=list(steps),
         )
-        return self.code_gen.generate_test_script(script_def)
+        return self.code_gen.generate_test_script(
+            script_def, template_path=template_path)
 
     def generate_data(self, captured_values: dict, domain: str) -> TestDataDef:
         return self.data_fmt.format(captured_values, {"domain": domain})

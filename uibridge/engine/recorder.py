@@ -3,6 +3,9 @@
 import json
 import time
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 from playwright.sync_api import Page
 
 from .ir.raw_recording import (
@@ -513,6 +516,7 @@ class RecordingSession:
         try:
             self.page.evaluate(RECORDER_JS)
         except Exception:
+            logger.warning("Failed to evaluate recorder JS on page", exc_info=True)
             pass
 
         # KB 驱动噪声过滤：将定位器属性白名单注入浏览器
@@ -522,12 +526,14 @@ class RecordingSession:
                     "window.__uibridge_locator_attrs = " + json.dumps(self.locator_attrs)
                 )
             except Exception:
+                logger.warning("Failed to inject locator attrs whitelist", exc_info=True)
                 pass
 
         # 刷新排队中的 expose_binding 回调（sync_playwright 调度器只在 API 调用时处理回调）
         try:
             self.page.wait_for_timeout(100)
         except Exception:
+            logger.warning("Failed to flush expose_binding callbacks", exc_info=True)
             pass
 
         self.page.on("framenavigated", self._on_navigate)
@@ -849,14 +855,17 @@ class RecordingSession:
         try:
             frame.expose_binding("__uibridge_report", self._handle_js_event)
         except Exception:
+            logger.warning("Failed to expose binding on attached frame", exc_info=True)
             pass
         try:
             frame.add_init_script(RECORDER_JS)
         except Exception:
+            logger.warning("Failed to add init script to attached frame", exc_info=True)
             pass
         try:
             frame.evaluate(RECORDER_JS)
         except Exception:
+            logger.warning("Failed to evaluate recorder JS on attached frame", exc_info=True)
             pass
 
     def _on_popup(self, popup):
@@ -866,14 +875,17 @@ class RecordingSession:
         try:
             popup.expose_binding("__uibridge_report", self._handle_js_event)
         except Exception:
+            logger.warning("Failed to expose binding on popup", exc_info=True)
             pass
         try:
             popup.add_init_script(RECORDER_JS)
         except Exception:
+            logger.warning("Failed to add init script to popup", exc_info=True)
             pass
         try:
             popup.evaluate(RECORDER_JS)
         except Exception:
+            logger.warning("Failed to evaluate recorder JS on popup", exc_info=True)
             pass
         popup.on("framenavigated", self._on_navigate)
         popup.on("console", self._on_console)
@@ -933,17 +945,20 @@ class RecordingSession:
         try:
             aria = self.page.locator("html").aria_snapshot()
         except Exception as e:
+            logger.warning("Failed to capture ARIA snapshot", exc_info=True)
             aria = ""
             errors.append(f"aria_snapshot: {e}")
         try:
             title = self.page.title()
         except Exception as e:
+            logger.warning("Failed to capture page title", exc_info=True)
             title = ""
             errors.append(f"title: {e}")
         try:
             layout_raw = self.page.evaluate("window.__uibridge_get_layout && window.__uibridge_get_layout()")
             layout_info = layout_raw if isinstance(layout_raw, str) else json.dumps(layout_raw or {})
         except Exception as e:
+            logger.warning("Failed to capture layout info", exc_info=True)
             layout_info = "{}"
             errors.append(f"layout: {e}")
         url = self.page.url
@@ -984,6 +999,7 @@ class RecordingSession:
             self.page.evaluate("window.__uibridge_flush_mutations && window.__uibridge_flush_mutations()")
             self.page.wait_for_timeout(300)
         except Exception:
+            logger.warning("Failed to flush pending mutations before stop", exc_info=True)
             pass
         with self._lock:
             self._active = False

@@ -11,7 +11,7 @@ confidence:
   self_test_passes: 0
   self_test_failures: 0
   effective_score: 0.95
-  last_validated_at: 1779383260.2079027
+  last_validated_at: 1779600473.5863028
   decay_rate: 0.0
   manual_override: null
   history: []
@@ -20,7 +20,7 @@ tags:
 - human
 - convention
 source_file: human
-created_at: 1779383260.2079175
-updated_at: 1779383260.2079215
+created_at: 1779600473.586314
+updated_at: 1779600473.5863168
 version: 1
 archived: false

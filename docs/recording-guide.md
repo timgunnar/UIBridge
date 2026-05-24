@@ -148,7 +148,7 @@ AI: 修改生成代码，将 id 定位改为 data-testid
 
 ### 反馈如何持久化
 
-uibridge 的知识库（KB）在 `.uibridge/kb/` 下以 YAML 文件存储。你的每次反馈都会被记录：
+uibridge 的知识库（KB）在 `.uibridge/kb/` 下以 YAML 文件存储（含框架画像 `profile.yaml` 和聚合知识条目）。你的每次反馈都会被记录：
 
 ```yaml
 # .uibridge/kb/conventions/locator_priority.yaml

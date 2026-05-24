@@ -1,5 +1,9 @@
 """业务 AW 生成器 — 从频繁模式自动生成业务 AW"""
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from ..adapter.base import BAWDef, BAWOperationDef, CallDef, CodeGenerator, ActionRecognizer
 
 

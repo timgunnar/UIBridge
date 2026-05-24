@@ -8,33 +8,50 @@
 
 知识库（KB）是 `.uibridge/kb/` 下的 YAML 文件集合，存储从项目源码自动提取的框架约定。**KB 决定了生成代码的包名、import、组件类名、定位器优先级和断言风格。**
 
+KB 与**框架画像（Profile）**解耦为两个独立系统：
+
+- **Profile（框架画像）**：存储在 `.uibridge/profile.yaml`，定义项目的宏观元数据。Profile 是以下信息的**权威来源**：`base_classes`、`locator_priorities`、`naming_conventions`、`source_dirs`、`layer_structure`。详见[框架画像维护指南](profile-maintenance-guide.md)。
+- **KB**：存储在 `.uibridge/kb/{category}/*.yaml`，存储运行时发现的模式（组件方法、操作序列、页面构成等）。KB 的约定（conventions）仅存储 Profile 中**未覆盖**的运行时发现模式，不重复 Profile 中已有的信息。
+
+KB 采用**两阶段建立**：Phase 1 先扫描项目建立框架画像，Phase 2 只扫描 UI 目录按组件族聚合提取，将 15000+ 个源码文件的噪声压缩为 ~50-200 条精准知识。
+
 ```
-.uibridge/kb/
-├── components/     ← 组件类名、方法、定位器
-├── conventions/    ← 命名约定、定位器优先级、import 风格
-├── patterns/       ← 频繁操作序列模式
-├── pages/          ← 页面构成信息
-└── archive/        ← 低置信度归档条目
+.uibridge/
+├── profile.yaml       ← 框架画像（Phase 1 输出，独立于 KB 的运行时配置源）
+└── kb/
+    ├── components/    ← 组件族聚合条目（Phase 2 输出）
+    ├── conventions/   ← runtime-discovered 约定（不重复 profile 已有项）
+    ├── patterns/      ← 频繁操作序列模式
+    ├── pages/         ← 页面构成信息
+    ├── snapshots/     ← 组件快照（用于新鲜度监控）
+    └── archive/       ← 低置信度归档条目
 ```
+
+KB 内置**倒排索引**，对搜索词建立 token→item 映射，大部分查询命中小于 10ms，无需遍历全量 YAML 文件。
+
+> **框架画像是什么？** 画像是项目的 UI 框架元数据快照，记录了哪些目录是 UI 代码、基类是什么、定位器优先级等。Phase 2 依据画像过滤掉 Model/Service/DTO 等非 UI 文件，只提取真正有意义的 UI 知识。画像通过 NL 对话和文档理解持续增强。
 
 ---
 
 ## KB 自动建立流程
 
-KB 无需手动播种。首次使用 `analyze_page` / `generate_test_code` 时自动触发：
+KB 无需手动播种。首次使用 `analyze_page` / `generate_test_code` 时自动触发两阶段建立：
 
 ```mermaid
 flowchart TD
     A["首次使用<br/>analyze_page / generate_test_code"] --> B
-    B["检测 KB<br/>是否为空"] -->|"条目 <5"| C
+    B["检测 KB<br/>是否为空"] -->|"条目 < 阈值"| C
     B -->|"已有条目"| G["跳过播种<br/>直接使用"]
-    C["自动检测<br/>项目结构"] --> D
-    D["扫描源码<br/>.java / .py"] --> E
-    E["提取知识<br/>组件/页面/约定"] --> F
-    F["存入 KB<br/>带置信度"] --> G
+    C["Phase 1: 项目画像<br/>扫描 pom.xml + 抽样文件"] --> D
+    D["生成 profile.yaml<br/>UI 包/基类/定位器优先级"]
+    D -->|"置信度 ≥ 0.3"| E
+    D -->|"置信度不足"| X["回退传统扫描"]
+    E["Phase 2: 聚合提取<br/>只扫描 UI 目录 → 组件族聚合"] --> F
+    F["存入 KB<br/>~50-200 条目"] --> G
 
     style A fill:#e1f5fe
     style G fill:#c8e6c9
+    style D fill:#fff9c4
 ```
 
 ### 阶段 1：项目结构自动检测
@@ -49,18 +66,30 @@ flowchart TD
 
 非标准 Maven 目录（如 `<sourceDirectory>src/my-java</sourceDirectory>`）通过读取 `pom.xml` 自动适配。无 `src/main/java` 的项目通过递归扫描 `.java` 文件位置反推实际目录。
 
-### 阶段 2：源码扫描与提取
+### Phase 1：项目画像
 
-| 源文件 | 提取内容 | 初始置信度 |
-|--------|---------|-----------|
-| 页面对象 (`*Page.java`, `*AW.java`) | 类名、方法签名、定位器模式（XPath/CSS） | 0.6-0.8 |
-| 测试脚本 (`*Test.java`) | 测试命名、断言风格、import 列表 | 0.6-0.8 |
-| 组件封装 (`*AW.java`, `*Widget.java`) | 组件类型、方法、属性标识 | 0.7 |
-| 设计文档 | 命名约定、架构说明 | 0.5 |
+| 分析步骤 | 内容 | 产出 |
+|---------|------|------|
+| 构建文件分析 | 读取 pom.xml / build.gradle | 项目类型、模块结构 |
+| 源码抽样 | 抽取 50 个文件分析注解/基类/包名 | UI 包路径、基类映射 |
+| 命名推断 | 从类名提取前缀/后缀模式 | 命名约定 |
+| 定位器统计 | 统计各定位器属性的使用频率 | 定位器优先级 |
+
+Phase 1 生成 `.uibridge/profile.yaml`（框架画像），不产生 KBItem。详见[框架画像维护指南](profile-maintenance-guide.md)。
+
+### Phase 2：聚合提取
+
+| 步骤 | 内容 | 产出数量 |
+|------|------|---------|
+| UI 文件过滤 | 仅保留画像 ui_packages 中指定的路径 | 从 15000+ → ~200 文件 |
+| 组件族聚合 | 同类型组件（Table* → "table"）合并 | ~50-150 个聚合 KBItem |
+| 页面索引 | 提取页面级知识 | ~10-30 个 |
+| 约定批量生成 | 基于画像生成全局约定 | 3-8 个 |
+| 模式挖掘 | 从测试文件提取 BAW 操作模式 | 5-20 个 |
 
 ### 阶段 3：持续演化
 
-KB 不是一次性产物，随项目使用持续自我优化：
+KB 不是一次性产物，随项目使用持续自我优化。演化逻辑由 `KBEvolution` 类统一管理，对用户透明：
 
 ```mermaid
 flowchart LR
@@ -77,6 +106,16 @@ flowchart LR
 
     style C fill:#fff9c4
 ```
+
+**KBEvolution** 负责三个演化操作：
+
+| 操作 | 触发条件 | 效果 |
+|------|---------|------|
+| 衰减 | 条目的 `decay_rate > 0`，随时间推移 | 未验证的动态知识置信度逐步降低 |
+| 泛化 | 同一类别中出现 ≥3 个相似 value 结构的条目 | 合并模式，置信度各 +0.05，标记 `generalized` |
+| 归档 | 置信度 <0.2 且自检失败 ≥3 次 | 条目移入 `archive/`，不再参与生成 |
+
+**FreshnessMonitor** 负责组件新鲜度监控：对 Profile 中 `component_monitoring` 配置的组件，定期对比 KB 快照与源码。快照比较使用**结构化方法签名解析**——不仅检测方法的增删，还检测返回类型和参数列表的变化，生成精确的差异报告。开箱后自动激活，详见[框架画像维护指南](profile-maintenance-guide.md)中 `component_monitoring` 字段说明。
 
 ---
 
@@ -126,6 +165,28 @@ Agent → 搜索定位 → 预览 → 确认 → 软删除
 
 ---
 
+## KB 搜索机制
+
+KB 查询采用**三级回退搜索**，平衡速度与召回率：
+
+```
+查询输入 → 倒排索引（<10ms） → 命中？ → 返回
+                ↓ 未命中
+           子串匹配 → 命中？ → 返回
+                ↓ 未命中
+           TF-IDF 关键词评分 → 返回 Top-N
+```
+
+| 层级 | 方法 | 特点 |
+|------|------|------|
+| L1 倒排索引 | 分词后查 token→item 映射表，按 token 命中数排序 | 毫秒级响应，处理大多数精确查询 |
+| L2 子串匹配 | 遍历条目文本做大小写不敏感子串匹配 | 中等开销，处理索引未覆盖的模糊查询 |
+| L3 TF-IDF 评分 | 对查询词计算 IDF 加权余弦相似度，结合置信度排序 | 较高开销但覆盖最广，处理语义级泛化查询 |
+
+三层的综合得分公式：`combined = relevance x 0.5 + confidence x 0.5`，确保结果既相关又可靠。用户通过 `query_knowledge_base` MCP 工具或 Agent NL 对话触发查询时，以上搜索路径对用户完全透明。
+
+---
+
 ## 置信度机制
 
 每个 KB 条目有置信度 (0.0~1.0)，决定生成时是否被采纳：
@@ -155,17 +216,21 @@ Agent → 搜索定位 → 预览 → 确认 → 软删除
 KB 是纯 YAML，可直接编辑：
 
 ```yaml
-# .uibridge/kb/conventions/locator_priority.yaml
-category: conventions
-key: convention.locator_priority
+# .uibridge/kb/components/table.yaml
+category: components
+key: component.table.methods
 value:
-  priority:
-    - data-testid      # 编辑：调整优先级顺序
-    - data-module
-    - id
-confidence: 0.95
-description: "用户确认 data-testid 为首选定位属性"
+  methods:
+    - sortColumn(String column, Direction dir)
+    - getRowCount()
+    - selectRow(int index)
+  locators:
+    data_testid: "result-table"
+confidence: 0.85
+description: "表格组件的已知方法和定位器"
 ```
+
+> **注意**：`locator_priorities`、`base_classes`、`naming_conventions` 等全局元信息属于 Profile（`.uibridge/profile.yaml`），修改这些字段请编辑 Profile 或通过 NL 对话操作画像。KB conventions 仅存储 Profile 未覆盖的运行时发现模式。
 
 编辑后下次生成即刻生效。
 
@@ -176,17 +241,17 @@ description: "用户确认 data-testid 为首选定位属性"
 KB 是 YAML 文件，天然适合 Git 管理：
 
 ```bash
-git add .uibridge/kb/
+git add .uibridge/profile.yaml .uibridge/kb/
 git commit -m "KB: 更新定位器优先级为 data-testid"
 ```
 
-**建议**：将 `.uibridge/kb/` 和 `.uibridge/adapter.yaml` 纳入版本控制，团队共享 KB。
+**建议**：将 `.uibridge/profile.yaml`、`.uibridge/kb/` 和 `.uibridge/adapter.yaml` 纳入版本控制，团队共享画像和 KB。
 
 ---
 
 ## 归档与清理
 
-低置信度条目（<0.3 + 失败≥3次）自动移入 `archive/`，不参与生成。
+低置信度条目（置信度 <0.2 且自检失败 ≥3 次）由 `KBEvolution` 自动移入 `archive/`，不参与生成。归档条件在 KBEvolution 中集中管理，用户无需手动维护。
 
 ```bash
 # 预览归档

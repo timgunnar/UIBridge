@@ -3,15 +3,15 @@
 import re
 from pathlib import Path
 from typing import Optional
+import logging
 
-from jinja2 import Environment, BaseLoader
+logger = logging.getLogger(__name__)
 
 from .base import (
     ComponentResolver, LocatorStrategy, ActionRecognizer,
     CodeGenerator, DataFormatter,
     MethodTemplate, ComponentDef, PageComponent, PageDef,
     BAWDef, BAWOperationDef, CallDef,
-    ImportStyle, FixtureStyle, AssertionStyle,
     ElementInfo, TestDataDef, ScriptDef,
     scan_java_source_for_package,
     sanitize_identifier,
@@ -19,10 +19,10 @@ from .base import (
     to_java_class_name,
     post_process_java_code,
     format_action_params,
+    extract_domain,
+    JINJA_ENV,
+    resolve_package,
 )
-
-_JINJA_ENV = Environment(loader=BaseLoader())
-_DOMAIN_RE = re.compile(r'/(\w+)/(manage|list|create|edit|detail)')
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -146,7 +146,7 @@ class JavaComponentResolver(ComponentResolver):
         return tag_map.get(tag, "WebElement")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
-        domain = self._extract_domain(url)
+        domain = extract_domain(url)
         data_module = dom_attrs.get("data-module", "")
         if data_module:
             return to_java_class_name(data_module)
@@ -171,13 +171,6 @@ class JavaComponentResolver(ComponentResolver):
             return "WebDialog"
         return self.ARIA_MAP.get(aria_role, "WebElement")
 
-    def _extract_domain(self, url: str) -> str:
-        match = _DOMAIN_RE.search(url)
-        if match:
-            return match.group(1)
-        parts = url.rstrip("/").split("/")
-        return parts[-1] if parts else "unknown"
-
 
 # ═══════════════════════════════════════════════════════════════
 # JavaLocatorStrategy
@@ -193,11 +186,12 @@ class JavaLocatorStrategy(LocatorStrategy):
 
     def build_xpath(self, element_info: ElementInfo, dom_context: dict) -> str:
         attrs = element_info.attrs
-        for ancestor in element_info.ancestor_chain:
-            anc_attrs = ancestor.get("attrs", {})
-            if "data-module" in anc_attrs:
-                module = anc_attrs["data-module"]
-                return f"//*[@data-module='{module}']//{element_info.tag}[@{self._best_attr(attrs)}='{attrs.get(self._best_attr(attrs))}']"
+        for selector in self._build_ancestor_chain(element_info, max_depth=3):
+            m = re.search(r"data-module='([^']+)'", selector)
+            if m:
+                module = m.group(1)
+                best = self.best_attr(element_info)
+                return f"//*[@data-module='{module}']//{element_info.tag}[@{best}='{attrs.get(best)}']"
         for attr in ["id", "name", "data-testid", "data-module"]:
             if attr in attrs and attrs[attr]:
                 return f"//{element_info.tag}[@{attr}='{attrs[attr]}']"
@@ -218,7 +212,9 @@ class JavaLocatorStrategy(LocatorStrategy):
     def get_locator_priority(self) -> list[str]:
         return self._resolve_locator_priority()
 
-    def _best_attr(self, attrs: dict) -> str:
+    def best_attr(self, element) -> str:
+        """Return best attribute name for XPath construction."""
+        attrs = element.attributes if hasattr(element, 'attributes') else element.attrs
         for attr in ["id", "name", "data-testid"]:
             if attr in attrs and attrs[attr]:
                 return attr
@@ -232,75 +228,8 @@ class JavaLocatorStrategy(LocatorStrategy):
 class JavaActionRecognizer(ActionRecognizer):
     """将 DOM 操作序列聚合为 Java Page Object 方法调用"""
 
-    def aggregate(self, raw_steps: list, page_context: dict) -> list:
-        actions = []
-        buffer = []
-        current_type = None
-
-        for step in raw_steps:
-            if isinstance(step, dict):
-                step_type = step.get("action", "")
-            else:
-                step_type = step.action.value if hasattr(step.action, "value") else str(step.action)
-
-            if step_type == "navigate":
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                current_type = "navigation"
-                buffer.append(step)
-            elif step_type in ("input", "fill"):
-                if current_type == "click":
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = "input"
-            elif step_type == "click":
-                if current_type == "input":
-                    buffer.append(step)
-                else:
-                    if buffer:
-                        actions.append(self._aggregate_buffer(buffer, current_type))
-                        buffer = []
-                    buffer.append(step)
-                current_type = "click"
-            else:
-                if buffer:
-                    actions.append(self._aggregate_buffer(buffer, current_type))
-                    buffer = []
-                buffer.append(step)
-                current_type = step_type
-
-        if buffer:
-            actions.append(self._aggregate_buffer(buffer, current_type))
-        return actions
-
-    def _aggregate_buffer(self, buffer: list, action_type: str) -> dict:
-        if not buffer:
-            return {}
-        first = buffer[0]
-        target_label = ""
-        target_tag = ""
-        value = ""
-        if isinstance(first, dict):
-            t = first.get("target", {})
-            if isinstance(t, dict):
-                target_label = t.get("label", "")
-                target_tag = t.get("tag", "")
-            value = first.get("value", "")
-        elif hasattr(first, 'target') and first.target:
-            target_label = first.target.label or ""
-            target_tag = first.target.tag or ""
-            value = getattr(first, 'value', '') or ''
-
-        base = {
-            "raw_steps": list(buffer),
-            "component": sanitize_identifier(target_label, fallback_tag=target_tag or "page") if target_label else "page",
-            "value": value,
-        }
-        if action_type == "input" and len(buffer) >= 2:
-            return {**base, "type": "composite_action", "action": "enterAndSubmit", "steps": len(buffer)}
-        return {**base, "type": "single_action", "action": action_type, "steps": len(buffer)}
+    def _composite_action_name(self) -> str:
+        return "enterAndSubmit"
 
 
 
@@ -312,62 +241,25 @@ class JavaCodeGenerator(CodeGenerator):
     """生成 Java + TestNG/JUnit5 + Selenium 风格代码"""
     target_language = "java"
     default_base_class = "BaseComponent"
+    DEFAULT_PACKAGE = "com.acme"
+    DEFAULT_BASE_PAGE = "BasePage"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None,
-                 base_page_class: str = "BasePage", test_framework: str = "testng"):
+                 base_page_class: str = DEFAULT_BASE_PAGE, test_framework: str = "testng"):
         self.kb = kb_manager
+        self.kb_manager = kb_manager
+        self.project_root = str(kb_manager.project_root) if kb_manager and hasattr(kb_manager, 'project_root') else ""
         if package_name is not None:
             self.package = package_name
         else:
-            pkg = self._resolve_package()
+            pkg = resolve_package(self.project_root, self.kb_manager, self.DEFAULT_PACKAGE)
             if pkg is None:
-                self.package = "com.acme"
+                self.package = self.DEFAULT_PACKAGE
             else:
                 self.package = pkg  # "" 表示默认包
         self.base_page = base_page_class
         self.test_framework = test_framework  # "testng" | "junit5" | "junit4"
         self._detect_framework()
-
-    def _resolve_package(self) -> Optional[str]:
-        """从 KB 或源码扫描检测项目包名。
-
-        返回值：
-        - 包名字符串：检测到统一包名
-        - ""（空字符串）：默认包（无 package 声明）
-        - None：无法检测
-        """
-        packages: set[str] = set()
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "package" in item.key:
-                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
-                    if pkg:
-                        packages.add(pkg)
-            if not packages:
-                for item in self.kb.store.list_category("components"):
-                    key = item.key
-                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
-                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
-                        if len(pkg_parts) > 1:
-                            packages.add(pkg_parts[0])
-            if packages:
-                parts_list = [p.split(".") for p in packages]
-                common = parts_list[0]
-                for p in parts_list[1:]:
-                    i = 0
-                    while i < min(len(common), len(p)) and common[i] == p[i]:
-                        i += 1
-                    common = common[:i]
-                if common:
-                    return ".".join(common)
-
-        # 源码扫描兜底
-        if self.kb and hasattr(self.kb, 'project_root'):
-            result = scan_java_source_for_package(str(self.kb.project_root))
-            if result is not None:
-                return result
-
-        return None
 
     def _detect_framework(self):
         """从 KB 或项目源码自动检测测试框架"""
@@ -391,79 +283,34 @@ class JavaCodeGenerator(CodeGenerator):
                             self.test_framework = "junit4"
                             return
                     except Exception:
+                        logger.warning("Failed to read Java file during framework detection", exc_info=True)
                         pass
-
     def generate_component_aw(self, comp_def: ComponentDef) -> str:
-        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(JAVA_COMPONENT_TEMPLATE)
+        JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = JINJA_ENV.from_string(JAVA_COMPONENT_TEMPLATE)
         return post_process_java_code(template.render(comp=comp_def, package=self.package), self.package)
 
     def generate_business_aw(self, baw_def: BAWDef) -> str:
-        template = _JINJA_ENV.from_string(JAVA_PAGE_OBJECT_TEMPLATE)
+        template = JINJA_ENV.from_string(JAVA_PAGE_OBJECT_TEMPLATE)
         return post_process_java_code(template.render(baw=baw_def, package=self.package), self.package)
 
-    def generate_test_script(self, script_def: ScriptDef) -> str:
+    def generate_test_script(self, script_def: ScriptDef,
+                             template_path: str = "") -> str:
         if self.test_framework == "junit5":
-            template = _JINJA_ENV.from_string(JAVA_JUNIT5_TEMPLATE)
+            template = JINJA_ENV.from_string(JAVA_JUNIT5_TEMPLATE)
         else:
-            template = _JINJA_ENV.from_string(JAVA_TESTNG_TEMPLATE)
+            template = JINJA_ENV.from_string(JAVA_TESTNG_TEMPLATE)
         return post_process_java_code(template.render(s=script_def, package=self.package,
                                framework=self.test_framework), self.package)
 
-    def generate_test_data(self, data_def: TestDataDef) -> str:
-        _JINJA_ENV.filters["repr"] = lambda v: repr(v)
-        template = _JINJA_ENV.from_string(JAVA_TEST_DATA_TEMPLATE)
+    def generate_test_data(self, data_def: TestDataDef,
+                           template_path: str = "") -> str:
+        JINJA_ENV.filters["repr"] = lambda v: repr(v)
+        template = JINJA_ENV.from_string(JAVA_TEST_DATA_TEMPLATE)
         return post_process_java_code(template.render(d=data_def, package=self.package), self.package)
 
-    def get_import_style(self) -> ImportStyle:
-        is_junit5 = self.test_framework == "junit5"
-        test_imports = [
-            "import org.junit.jupiter.api.Test;",
-            "import org.junit.jupiter.api.BeforeEach;",
-            "import org.junit.jupiter.api.AfterEach;",
-        ] if is_junit5 else [
-            "import org.testng.annotations.Test;",
-            "import org.testng.annotations.BeforeMethod;",
-        ]
-        assert_import = "import static org.junit.jupiter.api.Assertions.*;" if is_junit5 else "import org.testng.Assert;"
-
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "import_style" in item.key:
-                    examples = item.value.get("examples", [])
-                    return ImportStyle(
-                        from_imports=examples + [
-                            f"import {self.package}.pages.HomePage;",
-                            f"import {self.package}.components.WebInput;",
-                            f"import {self.package}.components.WebButton;",
-                        ],
-                        direct_imports=[
-                            *test_imports,
-                            "import org.openqa.selenium.WebDriver;",
-                            "import org.openqa.selenium.chrome.ChromeDriver;",
-                            assert_import,
-                        ],
-                    )
-        return ImportStyle(
-            from_imports=[
-                f"import {self.package}.pages.HomePage;",
-                f"import {self.package}.components.WebInput;",
-                f"import {self.package}.components.WebButton;",
-            ],
-            direct_imports=[
-                *test_imports,
-                "import org.openqa.selenium.WebDriver;",
-                "import org.openqa.selenium.chrome.ChromeDriver;",
-                assert_import,
-            ],
-        )
-
-    def get_assertion_style(self) -> AssertionStyle:
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "assertion_style" in item.key:
-                    return AssertionStyle(type=item.value.get("type", "testng_assert"))
-        return AssertionStyle(type="testng_assert")
+    def _default_assertion_style(self) -> str:
+        return "testng_assert"
 
     def render_step(self, step) -> str:
         """Java TestNG 风格步骤渲染"""
@@ -526,51 +373,20 @@ class JavaCodeGenerator(CodeGenerator):
 
 class JavaDataFormatter(DataFormatter):
     """录制值 → Java 测试数据常量类"""
+    DEFAULT_PACKAGE = "com.acme"
 
     def __init__(self, kb_manager=None, package_name: Optional[str] = None):
         self.kb = kb_manager
+        self.kb_manager = kb_manager
+        self.project_root = str(kb_manager.project_root) if kb_manager and hasattr(kb_manager, 'project_root') else ""
         if package_name is not None:
             self.package = package_name
         else:
-            pkg = self._resolve_package()
+            pkg = resolve_package(self.project_root, self.kb_manager, self.DEFAULT_PACKAGE)
             if pkg is None:
-                self.package = "com.acme"
+                self.package = self.DEFAULT_PACKAGE
             else:
                 self.package = pkg
-
-    def _resolve_package(self) -> Optional[str]:
-        """从 KB 或源码扫描检测项目包名。"""
-        packages: set[str] = set()
-        if self.kb:
-            for item in self.kb.store.list_category("conventions"):
-                if "package" in item.key:
-                    pkg = item.value.get("package", "") if isinstance(item.value, dict) else ""
-                    if pkg:
-                        packages.add(pkg)
-            if not packages:
-                for item in self.kb.store.list_category("components"):
-                    key = item.key
-                    if key.startswith("java.") and "." in key[key.index("java.") + 5:]:
-                        pkg_parts = key.replace("java.", "").rsplit(".", 1)
-                        if len(pkg_parts) > 1:
-                            packages.add(pkg_parts[0])
-            if packages:
-                parts_list = [p.split(".") for p in packages]
-                common = parts_list[0]
-                for p in parts_list[1:]:
-                    i = 0
-                    while i < min(len(common), len(p)) and common[i] == p[i]:
-                        i += 1
-                    common = common[:i]
-                if common:
-                    return ".".join(common)
-
-        if self.kb and hasattr(self.kb, 'project_root'):
-            result = scan_java_source_for_package(str(self.kb.project_root))
-            if result is not None:
-                return result
-
-        return None
 
     def format(self, captured_values: dict, data_context: dict) -> TestDataDef:
         domain = data_context.get("domain", "unknown")
