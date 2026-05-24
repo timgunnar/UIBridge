@@ -6,21 +6,24 @@ value:
   - pattern: page
     replacement: currentPage
 confidence:
-  score: 0.95
+  score: 0.7
   source: human_injection
   self_test_passes: 0
-  self_test_failures: 0
-  effective_score: 0.95
-  last_validated_at: 1779600473.5863028
+  self_test_failures: 1
+  effective_score: 0.7
+  last_validated_at: 1779613017.860801
   decay_rate: 0.0
   manual_override: null
-  history: []
+  history:
+  - event: failure
+    score: 0.7
+    ts: 1779613017.860801
 description: 'Test naming rule: rename page → currentPage'
 tags:
 - human
 - convention
 source_file: human
-created_at: 1779600473.586314
-updated_at: 1779600473.5863168
+created_at: 1779613012.7841763
+updated_at: 1779613017.8608067
 version: 1
 archived: false

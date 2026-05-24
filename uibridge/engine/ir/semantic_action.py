@@ -45,3 +45,20 @@ class SemanticActionSequence:
             return obj
 
         return _convert(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SemanticActionSequence":
+        scenarios = []
+        for s in d.get("scenarios", []):
+            actions = [SemanticAction(**a) for a in s.get("actions", [])]
+            scenarios.append(SemanticScenario(
+                name=s.get("name", ""),
+                page_flow=s.get("page_flow", []),
+                actions=actions,
+                description=s.get("description", ""),
+            ))
+        return cls(
+            version=d.get("version", "2.0"),
+            meta=d.get("meta", {}),
+            scenarios=scenarios,
+        )

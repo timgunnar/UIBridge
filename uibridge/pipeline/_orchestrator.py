@@ -31,6 +31,7 @@ from .stage_analysis import StageAnalysis
 from .stage_mapping import StageMapping
 from .stage_generation import StageGeneration
 from .stage_recording import StageRecording
+from .ir_persistence import IRPersistence
 
 
 class Pipeline:
@@ -111,6 +112,7 @@ class Pipeline:
                                            kb_manager=kb_manager,
                                            profile_manager=profile_manager,
                                            project_root=project_root)
+        self._ir_persistence = IRPersistence(project_root)
 
     # ── Stage 1: 录制 → IR v1 ─────────────────
 
@@ -133,6 +135,16 @@ class Pipeline:
                             recording: RawRecording) -> list[dict]:
         self._generation._style_profile = self._style_profile
         return self._generation.generate_and_verify(call_seq, recording)
+
+    def persist_ir(self, input_file: str, recording: RawRecording,
+                   semantic: SemanticActionSequence,
+                   framework: FrameworkCallSequence,
+                   results: list[dict]):
+        try:
+            self._ir_persistence.save(input_file, recording, semantic, framework)
+            self._ir_persistence.save_generated_code(input_file, results)
+        except Exception:
+            logger.warning("Failed to persist IR for %s", input_file, exc_info=True)
 
     def _load_output_config(self) -> tuple[set[str], dict]:
         """Delegate to StageGeneration for backward compatibility."""

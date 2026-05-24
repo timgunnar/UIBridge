@@ -934,10 +934,10 @@ class TestKBStoreSearch:
     def setup(self):
         import tempfile
         self.tmpdir = tempfile.TemporaryDirectory()
-        from uibridge.kb.kb_store import KBStore
+        from uibridge.kb.store import KBStore
         self.store = KBStore(str(self.tmpdir.name))
         # 播种测试数据
-        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
         self.items = [
             KBItem(id="t1", category="components", key="component_type.ButtonAW",
                    value={"xpath": "//button[@data-test='submit']"},
@@ -1022,7 +1022,7 @@ class TestKBNLOperations:
     def setup(self):
         import tempfile
         self.tmpdir = tempfile.TemporaryDirectory()
-        from uibridge.kb.kb_manager import KBManager
+        from uibridge.kb.manager import KBManager
         self.km = KBManager(str(self.tmpdir.name))
         # 预播种一些条目，供 MODIFY/DELETE 使用
         self.km.inject(
@@ -1536,9 +1536,9 @@ class TestKBEvolution:
         import tempfile
         import shutil
         import time
-        from uibridge.kb.kb_store import KBStore
-        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
-        from uibridge.kb.kb_evolution import KBEvolution
+        from uibridge.kb.store import KBStore
+        from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.evolution import KBEvolution
 
         td = tempfile.mkdtemp()
         try:
@@ -1572,9 +1572,9 @@ class TestKBEvolution:
         import tempfile
         import shutil
         import time
-        from uibridge.kb.kb_store import KBStore
-        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
-        from uibridge.kb.kb_evolution import KBEvolution
+        from uibridge.kb.store import KBStore
+        from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.evolution import KBEvolution
 
         td = tempfile.mkdtemp()
         try:
@@ -1609,9 +1609,9 @@ class TestKBEvolution:
         """Item with effective_score<0.2 and 3+ failures should be archived."""
         import tempfile
         import shutil
-        from uibridge.kb.kb_store import KBStore
-        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
-        from uibridge.kb.kb_evolution import KBEvolution
+        from uibridge.kb.store import KBStore
+        from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.evolution import KBEvolution
 
         td = tempfile.mkdtemp()
         try:
@@ -1647,8 +1647,8 @@ class TestKBEvolution:
         """Evolution on an empty store should not crash."""
         import tempfile
         import shutil
-        from uibridge.kb.kb_store import KBStore
-        from uibridge.kb.kb_evolution import KBEvolution
+        from uibridge.kb.store import KBStore
+        from uibridge.kb.evolution import KBEvolution
 
         td = tempfile.mkdtemp()
         try:
@@ -1662,9 +1662,9 @@ class TestKBEvolution:
         """3+ items with same structural value signature get 'generalized' tag + score boost."""
         import tempfile
         import shutil
-        from uibridge.kb.kb_store import KBStore
-        from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
-        from uibridge.kb.kb_evolution import KBEvolution
+        from uibridge.kb.store import KBStore
+        from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
+        from uibridge.kb.evolution import KBEvolution
 
         td = tempfile.mkdtemp()
         try:

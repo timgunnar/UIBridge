@@ -229,8 +229,8 @@ class TestInstallState:
             "uibridge.generator.component_aw_gen",
             "uibridge.generator.business_aw_gen",
             "uibridge.generator.test_script_gen",
-            "uibridge.kb.kb_manager",
-            "uibridge.kb.kb_extractor",
+            "uibridge.kb.manager",
+            "uibridge.kb.extractor",
         ]
         for module_name in modules:
             __import__(module_name)

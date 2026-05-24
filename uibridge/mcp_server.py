@@ -105,7 +105,7 @@ def _load_adapter(adapter_config_path: Optional[str] = None):
 def _build_pipeline(adapter_config_path: Optional[str] = None, project_dir: str = "."):
     from uibridge.pipeline import Pipeline
     from uibridge.profile_manager import ProfileManager
-    from uibridge.kb.kb_manager import KBManager
+    from uibridge.kb.manager import KBManager
     resolver, locator, recognizer, code_gen, data_fmt = _load_adapter(adapter_config_path)
     profile_mgr = ProfileManager(project_dir)
     kb = KBManager(project_dir, profile_manager=profile_mgr)
@@ -555,12 +555,18 @@ async def generate_test_code(
     call_seq = pipeline.map_to_framework(semantic)
     results = pipeline.generate_and_verify(call_seq, recording)
 
+    # Channel 3: Persist IR for regeneration
+    try:
+        pipeline.persist_ir(input_file, recording, semantic, call_seq, results)
+    except Exception:
+        logger.warning("Failed to persist IR for regeneration", exc_info=True)
+
     # 自动模式挖掘：每次生成后从语义序列中挖掘可复用的 BAW 模式，写入 KB
     pattern_count = 0
     if pipeline.kb_manager:
         try:
             patterns = pipeline.mine_baw_patterns(semantic)
-            from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+            from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
             for p in patterns:
                 key = f"pattern.{p.get('baw_name', 'auto').lower()}"
                 existing = pipeline.kb_manager.store.get_by_key("patterns", key)
@@ -602,6 +608,8 @@ async def generate_test_code(
         output.append({
             "test_name": r["test_name"],
             "status": r["verify"].status,
+            "review_needed": r.get("review_needed", False),
+            "kb_items_updated": r.get("kb_items_updated", 0),
             "file": str(test_file.absolute()),
             "code_preview": r["code"][:500],
             "fix_suggestion": r["verify"].fix_suggestion if r["verify"].status != "passed" else None,
@@ -660,7 +668,7 @@ async def seed_knowledge_base(
     - project_dir: 项目根目录路径
     返回：播种的 KB 条目数量和分类。
     """
-    from uibridge.kb.kb_manager import KBManager
+    from uibridge.kb.manager import KBManager
 
     km = KBManager(project_dir)
     items = km.auto_seed()
@@ -704,7 +712,7 @@ async def query_knowledge_base(
     - project_dir: 项目根目录路径
     返回：匹配的 KB 条目。
     """
-    from uibridge.kb.kb_manager import KBManager
+    from uibridge.kb.manager import KBManager
 
     km = KBManager(project_dir)
     result = km.query_nl(query)
@@ -733,7 +741,7 @@ async def update_knowledge_base(
     返回：操作结果。
     """
     import json
-    from uibridge.kb.kb_manager import KBManager
+    from uibridge.kb.manager import KBManager
 
     km = KBManager(project_dir)
     result = km.operate_nl(instruction)
@@ -786,6 +794,356 @@ async def check_environment() -> str:
         },
         "issues": issues,
         "uibridge_version": __import__("uibridge").__version__,
+    }, indent=2, ensure_ascii=False)
+
+
+# ── Structured KB CRUD Tools ────────────────────────────
+
+
+@mcp.tool()
+async def add_kb_rule(
+    category: str,
+    key: str,
+    value_json: str,
+    description: str = "",
+    project_dir: str = ".",
+) -> str:
+    """新增 KB 规则。结构化参数，由 LLM 客户端解析用户的 NL 输入后填入。
+
+    Args:
+        category: conventions | components | patterns | pages
+        key: 人类可读的规则键名，如 "locator.table"
+        value_json: JSON 字符串，知识载荷，如 '{"preferred_attribute": "data-module"}'
+        description: 可读描述
+        project_dir: 项目根目录
+    """
+    from uibridge.kb.manager import KBManager
+    from uibridge.kb.item import KnowledgeSource
+    from uibridge.kb.audit import AuditLogger
+
+    valid_cats = {"conventions", "components", "patterns", "pages"}
+    if category not in valid_cats:
+        return json.dumps({"error": f"Invalid category. Must be one of: {valid_cats}"},
+                          indent=2, ensure_ascii=False)
+    try:
+        value = json.loads(value_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid value_json: {e}"}, indent=2, ensure_ascii=False)
+
+    audit = AuditLogger(project_dir)
+    km = KBManager(project_dir, audit_logger=audit)
+    item = km.inject(category=category, key=key, value=value, description=description)
+    item.confidence.source = KnowledgeSource.HUMAN_INJECTION
+    km.store.save(item)
+
+    return json.dumps({"status": "ok", "message": f"Added [{category}] {key}",
+                       "item_id": item.id, "category": category, "key": key},
+                      indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+async def modify_kb_rule(
+    category: str,
+    item_key: str,
+    corrections_json: str,
+    nl_note: str = "",
+    project_dir: str = ".",
+) -> str:
+    """修改已有 KB 规则。按 key 查找，按 corrections_json 更新 value 字段。
+
+    Args:
+        category: conventions | components | patterns | pages
+        item_key: 规则的 key（如 "locator.table"），非 ID
+        corrections_json: JSON 字符串，要更新的字段，如 '{"preferred_attribute": "role"}'
+        nl_note: 用户 NL 原文，记录在审计日志中
+        project_dir: 项目根目录
+    """
+    from uibridge.kb.manager import KBManager
+    from uibridge.kb.audit import AuditLogger
+
+    try:
+        corrections = json.loads(corrections_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid corrections_json: {e}"}, indent=2, ensure_ascii=False)
+
+    audit = AuditLogger(project_dir)
+    km = KBManager(project_dir, audit_logger=audit)
+
+    item = km.store.get_by_key(category, item_key)
+    if not item:
+        return json.dumps({"error": f"KB item not found: {category}/{item_key}"},
+                          indent=2, ensure_ascii=False)
+
+    before = {"value": item.value.copy(), "description": item.description}
+    km.correct(category, item.id, corrections, nl_note=nl_note)
+    after_item = km.store.get(category, item.id)
+
+    return json.dumps({"status": "ok", "message": f"Modified [{category}] {item_key}",
+                       "old_value": before["value"],
+                       "new_value": after_item.value if after_item else {}},
+                      indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+async def delete_kb_rule(
+    category: str,
+    item_key: str,
+    project_dir: str = ".",
+) -> str:
+    """删除（归档）KB 规则。按 key 查找。
+
+    Args:
+        category: conventions | components | patterns | pages
+        item_key: 规则的 key
+        project_dir: 项目根目录
+    """
+    from uibridge.kb.manager import KBManager
+    from uibridge.kb.audit import AuditLogger
+
+    audit = AuditLogger(project_dir)
+    km = KBManager(project_dir, audit_logger=audit)
+
+    item = km.store.get_by_key(category, item_key)
+    if not item:
+        return json.dumps({"error": f"KB item not found: {category}/{item_key}"},
+                          indent=2, ensure_ascii=False)
+
+    before = {"category": item.category, "key": item.key,
+              "value": item.value.copy(), "description": item.description}
+    km.store.archive(item)
+    audit.log("kb.delete", f"{category}/{item_key}", before, {},
+              source="delete_kb_rule")
+
+    return json.dumps({"status": "ok", "message": f"Deleted [{category}] {item_key}",
+                       "deleted": before}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+async def query_kb_rules(
+    query: str = "",
+    category: str = "",
+    min_confidence: float = 0.3,
+    project_dir: str = ".",
+) -> str:
+    """查询 KB 规则，返回结构化 JSON。
+
+    Args:
+        query: 搜索词（留空返回全部）
+        category: 按分类过滤（留空返回全部）
+        min_confidence: 最低置信度阈值
+        project_dir: 项目根目录
+    """
+    from uibridge.kb.manager import KBManager
+
+    km = KBManager(project_dir)
+
+    if category:
+        items = km.store.list_category(category)
+        if query:
+            q_lower = query.lower()
+            items = [i for i in items
+                     if q_lower in f"{i.key} {i.description} {str(i.value)}".lower()]
+    elif query:
+        items = km.store.search(query)
+    else:
+        items = km.store.list_all()
+
+    items = [i for i in items
+             if i.confidence.effective_score >= min_confidence and not i.archived]
+
+    return json.dumps({
+        "status": "ok",
+        "count": len(items),
+        "items": [{"category": i.category, "key": i.key, "id": i.id,
+                   "value": i.value, "description": i.description,
+                   "confidence": i.confidence.effective_score,
+                   "source": i.confidence.source.value} for i in items],
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+async def update_profile_field(
+    field: str,
+    value_json: str,
+    project_dir: str = ".",
+) -> str:
+    """更新单个画像字段。
+
+    Valid fields: base_classes, locator_priorities, source_dirs, naming_conventions,
+                  ui_packages, annotations, layer_structure, reference_directories,
+                  output_config, component_monitoring.
+
+    Args:
+        field: 字段名
+        value_json: JSON 字符串（dict 字段传 JSON object, list 字段传 JSON array）
+        project_dir: 项目根目录
+    """
+    from uibridge.profile_manager import ProfileManager
+    from uibridge.kb.audit import AuditLogger
+
+    try:
+        value = json.loads(value_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid value_json: {e}"}, indent=2, ensure_ascii=False)
+
+    audit = AuditLogger(project_dir)
+    pm = ProfileManager(project_dir)
+    old_profile = pm.get_profile()
+    before = getattr(old_profile, field).to_dict() if old_profile and hasattr(old_profile, field) else {}
+
+    try:
+        profile = pm.update_profile(field, value, source="human_dialogue")
+        after = getattr(profile, field).to_dict()
+        audit.log("profile.update", f"profile/{field}", before, after,
+                  source="update_profile_field")
+        return json.dumps({"status": "ok", "field": field,
+                           "old_value": before, "new_value": after,
+                           "confidence": getattr(profile, field).confidence},
+                          indent=2, ensure_ascii=False)
+    except (ValueError, KeyError) as e:
+        return json.dumps({"error": str(e)}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+async def confirm_profile_fields(
+    threshold: float = 0.7,
+    project_dir: str = ".",
+) -> str:
+    """返回置信度低于阈值的画像字段，供用户确认。
+
+    Args:
+        threshold: 置信度阈值（0.0-1.0），低于此值的字段需要确认
+        project_dir: 项目根目录
+    """
+    from uibridge.profile_manager import ProfileManager
+
+    pm = ProfileManager(project_dir)
+    result = pm.confirm_profile(threshold)
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+# ── Code Review & Regeneration Tools ─────────────────────
+
+
+@mcp.tool()
+async def review_generated_code(
+    input_file: str = "recording.json",
+    project_dir: str = ".",
+) -> str:
+    """查看已生成的测试代码及其 IR 结构，用于审查和纠正。
+
+    返回生成代码、review_needed 标记、IR 结构摘要。
+    用户审查后通过 regenerate_code 纠正问题。
+
+    Args:
+        input_file: 录制文件路径
+        project_dir: 项目根目录
+    """
+    from uibridge.pipeline.ir_persistence import IRPersistence
+
+    ir_persist = IRPersistence(project_dir)
+    generated = ir_persist.load_generated_code(input_file)
+    if generated is None:
+        return json.dumps({
+            "error": f"No generated code found for {input_file}. Run generate_test_code first.",
+        }, indent=2, ensure_ascii=False)
+
+    ir_data = ir_persist.load(input_file)
+    framework_summary = None
+    if ir_data:
+        _, _, fcs = ir_data
+        framework_summary = {
+            "test_case_count": len(fcs.test_cases),
+            "test_cases": [{"name": tc.name, "review_needed": tc.review_needed,
+                            "step_count": len(tc.steps)}
+                           for tc in fcs.test_cases],
+        }
+
+    return json.dumps({
+        "status": "ok",
+        "input_file": input_file,
+        "generated": generated,
+        "framework_summary": framework_summary,
+        "hint": "Use regenerate_code to correct issues. If your NL feedback contains "
+                "KB knowledge (e.g., 'TableAW base class is BaseWidget'), the KB "
+                "will be automatically updated alongside regeneration.",
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+async def regenerate_code(
+    input_file: str = "recording.json",
+    nl_feedback: str = "",
+    project_dir: str = ".",
+) -> str:
+    """从持久化 IR 重新生成代码。支持自然语言纠正。
+
+    NL feedback 同时触发两个信道：
+    - 信道 2：如果 feedback 中包含 KB 知识，自动更新 KB
+    - 信道 3：从持久化 IR 重新生成代码
+
+    Args:
+        input_file: 录制文件路径
+        nl_feedback: 自然语言纠正（如 "TableAW 的定位器应该用 data-module"）
+        project_dir: 项目根目录
+    """
+    from uibridge.pipeline import Pipeline
+    from uibridge.pipeline.ir_persistence import IRPersistence
+    from uibridge.kb.manager import KBManager
+    from uibridge.kb.audit import AuditLogger
+    from uibridge.adapter.loader import load_adapter
+
+    # Channel 2: NL feedback may contain KB knowledge
+    kb_updates = None
+    if nl_feedback:
+        try:
+            audit = AuditLogger(project_dir)
+            km = KBManager(project_dir, audit_logger=audit)
+            kb_result = km.operate_nl(nl_feedback)
+            if kb_result.get("status") == "ok" and kb_result.get("intent") in ("MODIFY", "ADD", "PROFILE"):
+                kb_updates = kb_result
+                logger.info("Auto-updated KB from NL feedback: %s", kb_result.get("message"))
+        except Exception:
+            logger.warning("Failed to process NL feedback for KB update", exc_info=True)
+
+    ir_persist = IRPersistence(project_dir)
+    ir_data = ir_persist.load(input_file)
+    if ir_data is None:
+        return json.dumps({
+            "error": f"No persisted IR found for {input_file}. Run generate_test_code first.",
+        }, indent=2, ensure_ascii=False)
+
+    recording, semantic, framework = ir_data
+
+    # Rebuild pipeline with current KB (may have been updated by NL feedback)
+    pipeline = _build_pipeline(None, project_dir)
+
+    # Re-run stages 3+4
+    call_seq = pipeline.map_to_framework(semantic)
+    results = pipeline.generate_and_verify(call_seq, recording)
+    pipeline.persist_ir(input_file, recording, semantic, call_seq, results)
+
+    out_dir = _sanitize_output_path("generated")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output = []
+    for r in results:
+        ext = ".java" if getattr(pipeline.code_generator, "target_language", "python") == "java" else ".py"
+        test_file = out_dir / f"{r['test_name']}{ext}"
+        test_file.write_text(r["code"], encoding="utf-8")
+        output.append({
+            "test_name": r["test_name"],
+            "status": r["verify"].status,
+            "review_needed": r.get("review_needed", False),
+            "kb_items_updated": r.get("kb_items_updated", 0),
+            "file": str(test_file.absolute()),
+            "code_preview": r["code"][:500],
+        })
+
+    return json.dumps({
+        "status": "ok",
+        "regenerated": len(output),
+        "kb_updates": kb_updates,
+        "results": output,
     }, indent=2, ensure_ascii=False)
 
 

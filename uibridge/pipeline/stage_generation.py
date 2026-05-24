@@ -31,6 +31,7 @@ class StageGeneration:
         self.project_root = project_root
         self._style_profile = None
         self._resolved_package = ""
+        self._kb_items_used: set[tuple[str, str]] = set()  # (category, item_id)
 
     def generate_and_verify(self, call_seq: FrameworkCallSequence,
                             recording: RawRecording) -> list[dict]:
@@ -145,6 +146,16 @@ class StageGeneration:
                         code = fix_info["fixed_code"]
                         verify = SelfTestResult(status="passed", confidence=0.85)
 
+            # Channel 1: Feedback self-test results to KB
+            if self.kb_manager and self._kb_items_used:
+                passed = verify.status == "passed"
+                for category, item_id in self._kb_items_used:
+                    try:
+                        self.kb_manager.record_self_test_result(item_id, category, passed)
+                    except Exception:
+                        logger.warning("Failed to record self-test result for %s/%s",
+                                       category, item_id, exc_info=True)
+
             results.append({
                 "test_name": tc.name,
                 "code": code,
@@ -153,8 +164,10 @@ class StageGeneration:
                 "verify": verify,
                 "fix_info": fix_info,
                 "review_needed": tc.review_needed or verify.status != "passed",
+                "kb_items_updated": len(self._kb_items_used),
                 "output_hints": output_hints,
             })
+            self._kb_items_used.clear()
 
         return results
 
@@ -251,6 +264,10 @@ class StageGeneration:
         default_pkg = getattr(self.code_generator, 'DEFAULT_PACKAGE', 'com.acme')
         if not pkg or pkg == default_pkg:
             return code
+        # Track the KB item providing this package convention
+        item = self.kb_manager.store.get_by_key("conventions", "convention.package")
+        if item:
+            self._kb_items_used.add((item.category, item.id))
         # 替换: package com.acme.tests; → package com.enterprise.tests;
         code = re.sub(r'\b' + re.escape(default_pkg) + r'\b', pkg, code)
         return code
@@ -272,6 +289,10 @@ class StageGeneration:
                 replacement = rule.get("replacement", "")
                 if pattern and replacement:
                     steps = [s.replace(pattern, replacement) for s in steps]
+        if naming_rules:
+            item = self.kb_manager.store.get_by_key("conventions", "convention.naming")
+            if item:
+                self._kb_items_used.add((item.category, item.id))
 
         # 定位器约定：KB 指定的自定义定位器格式 → 调整硬编码的定位器字符串
         locator_conventions = self.kb_manager.get_locator_conventions()
@@ -280,6 +301,9 @@ class StageGeneration:
             if preferred and preferred not in ("data-test", "id"):
                 for attr in ("data-test", "data-testid"):
                     steps = [s.replace(f"[{attr}=", f"[{preferred}=") for s in steps]
+            item = self.kb_manager.store.get_by_key("conventions", "convention.locator_priority")
+            if item:
+                self._kb_items_used.add((item.category, item.id))
 
         # 组件类型映射：KB 注册的自定义组件名 → 替换默认 Target/PageElement
         high_conf = self.kb_manager.get_high_confidence_knowledge()
@@ -289,6 +313,10 @@ class StageGeneration:
                 custom_name = item.get("class_name", "")
                 if default_name and custom_name and default_name != custom_name:
                     steps = [s.replace(default_name, custom_name) for s in steps]
+                # Track each high-confidence component KB item used
+                entry = self.kb_manager.store.get_by_key("components", key)
+                if entry:
+                    self._kb_items_used.add((entry.category, entry.id))
 
         return steps
 

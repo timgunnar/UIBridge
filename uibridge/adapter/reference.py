@@ -455,12 +455,16 @@ class ReferenceCodeGenerator(CodeGenerator):
             return f'assert page.locator("[data-module=\'{p["element"]}\']").text_content() == "{p["text"]}", "{p["element"]} text mismatch"'
         elif atype == "count_changed":
             direction = "more" if p["direction"] == "increased" else "fewer"
-            return f'# {p["role"]} count should be {direction}'
+            count_check = ">" if p["direction"] == "increased" else "<"
+            role = p.get("role", "element")
+            label = p.get("label", role)
+            return f'assert page.locator("[role=\'{role}\']").count() {count_check} 0, f"{{{label}}} count should be {{{direction}}}"'
         elif atype == "layout_stable":
-            return f'# assert layout of \'{p["element"]}\' is stable'
+            el = p.get("element", "unknown")
+            return f'assert True, f"TODO: verify layout of \'{{{el}}}\' is stable"'
         elif atype == "generic":
             msg = p.get("message", candidate)
-            return f'# verify: {msg}'
+            return f'assert True, f"verify: {{{msg}}}"'
         else:
             return f'assert True, f"TODO: assert {candidate}"'
 

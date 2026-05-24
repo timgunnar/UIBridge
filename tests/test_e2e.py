@@ -255,8 +255,8 @@ class TestEndToEnd:
 
     def test_pipeline_with_kb_manager(self):
         """带 KB Manager 的 Pipeline 应能正常完成全流程"""
-        from uibridge.kb.kb_store import KBStore
-        from uibridge.kb.kb_manager import KBManager
+        from uibridge.kb.store import KBStore
+        from uibridge.kb.manager import KBManager
 
         store = KBStore()
         kb = KBManager(str(self.tmpdir))

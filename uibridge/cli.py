@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 
 from .pipeline import Pipeline
 from .adapter.loader import load_adapter
-from .kb.kb_manager import KBManager
+from .kb.manager import KBManager
 from .profile_manager import ProfileManager
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def _ensure_browser_or_die():
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.3.5")
+@click.version_option(version="0.3.6")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 

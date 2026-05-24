@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## v0.3.6
+
+### 三个反馈信道
+
+**信道 1: 自检结果反馈 KB** — 生成代码的自检结果自动更新 KB 条目置信度：
+- `StageGeneration` 追踪生成过程中使用的 KB 条目（命名规则、定位器约定、组件映射）
+- 自检通过 → 关联的 KB 条目置信度 +0.02，失败 → -0.25
+- `generate_test_code` MCP 工具返回中新增 `review_needed` 和 `kb_items_updated` 字段
+
+**信道 2: NL KB/画像管理** — 8 个新的结构化 MCP 工具：
+- `add_kb_rule` / `modify_kb_rule` / `delete_kb_rule` / `query_kb_rules` — KB CRUD
+- `update_profile_field` / `confirm_profile_fields` — 画像管理
+- `review_generated_code` / `regenerate_code` — 代码审查与重生成
+- 所有变更写入审计日志（`.uibridge/audit.yaml`）
+- `operate_nl()` 的 ADD/MODIFY/DELETE 路径均记录审计日志
+
+**信道 3: 代码生成纠正** — 首创的中间 IR 持久化与增量重生成：
+- IR 持久化（`.uibridge/sessions/`）：录制 → 语义分析 → 框架映射 → 生成结果 三级 IR
+- `regenerate_code`：从持久化 IR 重新生成，支持 NL 反馈同时更新 KB（信道 2+3 联动）
+
+### 清理
+- 删除 5 个向后兼容 shim（`kb_item.py` 等）
+- 删除死代码 `apply_nl_feedback()`
+- 全代码库 `kb_xxx` 导入统一为无前缀路径
+
 ## v0.3.5
 
 ### 架构重构

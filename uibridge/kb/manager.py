@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 from .item import KBItem, Confidence, KnowledgeSource
 from .store import KBStore
-from .kb_extractor import KBExtractor
+from .extractor import KBExtractor
 from .evolution import KBEvolution
 from .freshness import FreshnessMonitor
 from .source_detection import SourceDetector
@@ -20,11 +20,12 @@ from ..profile import FrameworkProfile, ProfileField
 class KBManager:
     """Manages the full KB lifecycle with confidence scoring and NL interaction."""
 
-    def __init__(self, project_root: str = ".", profile_manager=None):
+    def __init__(self, project_root: str = ".", profile_manager=None, audit_logger=None):
         self.project_root = Path(project_root)
         self.store = KBStore(project_root)
         self.extractor = KBExtractor(project_root)
         self._profile_manager = profile_manager
+        self.audit_logger = audit_logger
 
     # ══════════════════════════════════════════════════════════
     # Seed Phase
@@ -290,6 +291,7 @@ class KBManager:
         if not item:
             raise KeyError(f"KB item not found: {category}/{item_id}")
 
+        before = {"value": item.value.copy(), "description": item.description}
         item.value.update(corrections)
         item.confidence.manual_override = corrections.get("confidence_override",
                                                           item.confidence.effective_score)
@@ -297,30 +299,13 @@ class KBManager:
         item.version += 1
         item.tags.append("corrected")
         self.store.save(item)
+        if self.audit_logger:
+            self.audit_logger.log(
+                "kb.modify", f"{category}/{item_id}",
+                before, {"value": item.value, "description": item.description},
+                source="structured_tool", note=nl_note,
+            )
         return item
-
-    def apply_nl_feedback(self, natural_language_feedback: str) -> list[KBItem]:
-        """Apply NL feedback: parse intent and update relevant KB items.
-
-        Examples:
-          "TableAW's XPath should use data-module, not class" → update component convention
-          "搜索框 should use data-test='search-box'" → update locator priority
-        """
-        affected = []
-        feedback_lower = natural_language_feedback.lower()
-
-        # Match against existing KB items by keyword
-        for item in self.store.list_all():
-            if any(tag.lower() in feedback_lower for tag in item.tags):
-                if "should" in feedback_lower or "must" in feedback_lower:
-                    item.confidence.score = max(0.8, item.confidence.score + 0.1)
-                    item.confidence.source = KnowledgeSource.HUMAN_INJECTION
-                    item.tags.append("nl-corrected")
-                    item.version += 1
-                    self.store.save(item)
-                    affected.append(item)
-
-        return affected
 
     # ══════════════════════════════════════════════════════════
     # Evolve Phase
@@ -497,7 +482,13 @@ class KBManager:
                         "query": target}
             # Delete the best match
             best = candidates[0]
+            before = {"value": best.value.copy(), "description": best.description,
+                      "category": best.category, "key": best.key}
             self.store.archive(best)
+            if self.audit_logger:
+                self.audit_logger.log("kb.delete", f"{best.category}/{best.key}",
+                                      before, {}, source="update_knowledge_base",
+                                      note=instruction)
             return {"status": "ok", "intent": "DELETE",
                     "message": f"已删除: [{best.category}] {best.key} — {best.description}",
                     "deleted": {"category": best.category, "key": best.key,
@@ -515,6 +506,10 @@ class KBManager:
                 value={"description": content, "source": "nl_dialogue"},
                 description=content,
             )
+            if self.audit_logger:
+                self.audit_logger.log("kb.add", f"{category}/{key}",
+                                      {}, {"value": item.value, "description": content},
+                                      source="update_knowledge_base", note=instruction)
             return {"status": "ok", "intent": "ADD",
                     "message": f"已新增: [{category}] {key} — {content}",
                     "added": {"category": category, "key": key, "description": content}}
@@ -529,6 +524,7 @@ class KBManager:
                         "query": target, "suggest_add": True}
             best = candidates[0]
             old_desc = best.description
+            before_val = best.value.copy()
             best.description = f"{old_desc} (modified via NL: {new_value or target})"
             if new_value:
                 best.value["nl_modification"] = new_value
@@ -537,6 +533,11 @@ class KBManager:
             best.confidence.score = max(0.9, best.confidence.score)
             best.version += 1
             self.store.save(best)
+            if self.audit_logger:
+                self.audit_logger.log("kb.modify", f"{best.category}/{best.key}",
+                                      {"value": before_val, "description": old_desc},
+                                      {"value": best.value, "description": best.description},
+                                      source="update_knowledge_base", note=instruction)
             return {"status": "ok", "intent": "MODIFY",
                     "message": f"已更新: [{best.category}] {best.key} — {best.description}",
                     "modified": {"category": best.category, "key": best.key,

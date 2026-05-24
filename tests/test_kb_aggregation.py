@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from uibridge.kb.kb_item import KBItem, Confidence, KnowledgeSource
+from uibridge.kb.item import KBItem, Confidence, KnowledgeSource
 from uibridge.profile import FrameworkProfile, ProfileField
 from uibridge.profile_store import ProfileStore
-from uibridge.kb.kb_store import KBStore
-from uibridge.kb.kb_extractor import KBExtractor
-from uibridge.kb.kb_manager import KBManager
+from uibridge.kb.store import KBStore
+from uibridge.kb.extractor import KBExtractor
+from uibridge.kb.manager import KBManager
 from uibridge.profile_manager import ProfileManager
 
 
