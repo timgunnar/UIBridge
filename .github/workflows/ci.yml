@@ -32,8 +32,5 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
 
-      - name: Verify demo project install
-        run: |
-          cd demo_projects/project_a_standard
-          pip install -e .
-          python -m pytest tests/ --collect-only
+      - name: Verify CLI entry point
+        run: uibridge --help
