@@ -28,9 +28,13 @@ _DEFAULT_DATA_FORMATTER = "uibridge.adapter.reference.ReferenceDataFormatter"
 
 def _import_class(cls_path: str):
     """动态导入类并实例化"""
-    module_path, class_name = cls_path.rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    return getattr(module, class_name)()
+    try:
+        module_path, class_name = cls_path.rsplit(".", 1)
+        module = importlib.import_module(module_path)
+        return getattr(module, class_name)()
+    except (ImportError, AttributeError, ValueError) as e:
+        logger.error("无法加载适配器组件 '%s': %s", cls_path, e)
+        raise ImportError(f"无法加载适配器组件 '{cls_path}': {e}") from e
 
 
 def load_adapter(adapter_config_path: Optional[str] = None) -> tuple:

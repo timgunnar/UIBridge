@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## v0.3.7
+
+### 问题清零
+
+**KNOWN_ISSUES 全部清零（48/48）**：
+- #45 `_apply_kb_conventions` 组件类型匹配死代码 — 修正嵌套 dict 遍历逻辑
+- #46 `kb_extractor` path.relative_to 无异常保护 — 新增 `safe_relative_to()` 包装，20 处统一替换
+- #47 `cli.py` 适配器导入无错误处理 — `_load_adapter_safe()` + loader.py ImportError 链
+- #48 `kb_manager.inject()` 无 value 类型校验 — 添加类型/非空校验
+
+**OPTIMIZE 全部清零（24/24）**：
+- #19 `suggest_name` 命名约定 — ABC 默认实现（snake_case），子类按需覆盖
+- #20 `build_xpath` ancestor_chain — 验证 v0.3.5 已全部统一
+- #21 ActionType 类型规范化 — 验证 pipeline 拆分后已集中处理
+- #22 正则未编译 — `_java.py`（7 个）、`_profile.py`（5 个）、`_conventions.py`（3 个）模块级编译
+- #23 模块零覆盖 — `custom_playwright_java.py`（82 tests）、`kb_extractor`（156 tests）、`aria_analyzer`（54 tests）、`runtime_analyzer`（39 tests）
+- #24 方法缺测试 — `kb_manager`（42 tests）、`style_learner`（37 tests）、`cli`（19 tests）、`mcp_server` helpers（63 tests）
+
+### Bug 修复
+- `cli.py` `_load_adapter_safe()` 递归调用自身 → 改为调用 `load_adapter()`
+- `style_learner.py` `ast.get_docstring()` 对不可文档化节点抛 `TypeError` → 安全包装 `_safe_get_docstring()`
+
+### 重构
+- `KNOWN_ISSUES.md` 移至 `OLD/`（48 项全部修复）
+- `CLAUDE.md` 清理所有 KNOWN_ISSUES 引用
+
 ## v0.3.6
 
 ### 三个反馈信道

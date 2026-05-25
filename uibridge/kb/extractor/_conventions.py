@@ -4,7 +4,15 @@ import logging
 import re
 from pathlib import Path
 
+from ._base import safe_relative_to
 from ..item import KBItem, Confidence, KnowledgeSource
+
+# Compiled regex for convention mining (hot path — called per source file)
+_CONV_IMPORT_RE = re.compile(r'^import\s+([\w.]+(?:\.\*)?)\s*;', re.MULTILINE)
+_CONV_METHOD_RE = re.compile(
+    r'(?:public|private|protected|static)\s+\w+\s+(\w+)\s*\([^)]*\).*\{'
+)
+_CONV_LOCATOR_CALL_RE = re.compile(r'(\w+)\.(\w+)\s*\(')
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +170,7 @@ class _ConventionsMixin:
             description=f"Operation patterns: dominant={dominant[0]} "
                         f"({dominant[1]}/{sum(category_counts.values())} methods)",
             tags=["operation", "convention", "aggregated"],
-            source_files=[str(f.relative_to(self.project_root)) for f in source_files
+            source_files=[safe_relative_to(f, self.project_root) for f in source_files
                           if f.suffix in (".java", ".py")][:30],
             aggregation="convention_batch",
         )
@@ -217,7 +225,7 @@ class _ConventionsMixin:
             description=f"Import patterns: top={top_package[0]} ({top_package[1]} usages, "
                         f"{len(import_counts)} distinct packages)",
             tags=["import", "convention", "aggregated"],
-            source_files=[str(f.relative_to(self.project_root)) for f in source_files
+            source_files=[safe_relative_to(f, self.project_root) for f in source_files
                           if f.suffix in (".java", ".py")][:30],
             aggregation="convention_batch",
         )
@@ -275,7 +283,7 @@ class _ConventionsMixin:
             description=f"Locator usage: top={top_locator[0]} ({top_locator[1]} sites, "
                         f"{len(locator_counts)} distinct types)",
             tags=["locator", "convention", "aggregated"],
-            source_files=[str(f.relative_to(self.project_root)) for f in source_files
+            source_files=[safe_relative_to(f, self.project_root) for f in source_files
                           if f.suffix in (".java", ".py")][:30],
             aggregation="convention_batch",
         )
@@ -333,7 +341,7 @@ class _ConventionsMixin:
             description=f"Assertion patterns: dominant={dominant[0]} "
                         f"({dominant[1]} occurrences, {len(sorted_styles)} styles detected)",
             tags=["assertion", "convention", "aggregated"],
-            source_files=[str(f.relative_to(self.project_root)) for f in test_files][:30],
+            source_files=[safe_relative_to(f, self.project_root) for f in test_files][:30],
             aggregation="convention_batch",
         )
 

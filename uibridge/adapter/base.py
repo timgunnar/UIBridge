@@ -312,9 +312,18 @@ class ComponentResolver(ABC):
     def resolve_type(self, aria_role: str, dom_attrs: dict, snapshot_context: str) -> str:
         ...
 
-    @abstractmethod
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
-        ...
+        """自动命名：URL domain + ARIA role → snake_case 标识符。
+
+        子类可覆盖以使用不同命名风格（PascalCase、UPPER_CASE 等）。
+        """
+        domain = extract_domain(url)
+        data_module = dom_attrs.get("data-module", "")
+        if data_module:
+            return data_module.replace("-", "_").replace(" ", "_")
+        role = aria_role or "element"
+        name = f"{domain}_{role}".replace(" ", "_").lower()
+        return name if len(name) > 3 else f"{role}_{domain}"
 
     @abstractmethod
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:

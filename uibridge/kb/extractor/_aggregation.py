@@ -4,6 +4,7 @@ import logging
 import re
 from pathlib import Path
 
+from ._base import safe_relative_to
 from ..item import KBItem, Confidence, KnowledgeSource
 from ...profile import FrameworkProfile, ProfileField
 
@@ -219,7 +220,7 @@ class _AggregationMixin:
         for f in files:
             class_info = {
                 "name": f.stem,
-                "source": str(f.relative_to(self.project_root)),
+                "source": safe_relative_to(f, self.project_root),
                 "methods": [],
                 "locators": [],
             }
@@ -273,7 +274,7 @@ class _AggregationMixin:
                         + (f", {len(common_methods)} shared methods" if common_methods else ""),
             tags=[family_name, "component", "aggregated"]
                  + [c["name"] for c in classes[:5]],
-            source_files=[str(f.relative_to(self.project_root)) for f in files],
+            source_files=[safe_relative_to(f, self.project_root) for f in files],
             aggregation="component_family",
         )
 
@@ -290,7 +291,7 @@ class _AggregationMixin:
 
         pages = []
         for f in page_files:
-            page_info = {"name": f.stem, "source": str(f.relative_to(self.project_root))}
+            page_info = {"name": f.stem, "source": safe_relative_to(f, self.project_root)}
             try:
                 content = f.read_text("utf-8")[:3000]
                 # Count feature points (data-module, data-testid, etc.)
@@ -315,7 +316,7 @@ class _AggregationMixin:
             confidence=Confidence(score=0.7, source=KnowledgeSource.STATIC_ANALYSIS),
             description=f"Page index: {len(pages)} pages",
             tags=["page", "index", "aggregated"],
-            source_files=[str(f.relative_to(self.project_root)) for f in page_files],
+            source_files=[safe_relative_to(f, self.project_root) for f in page_files],
             aggregation="page_index",
         ))
 

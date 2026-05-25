@@ -8,6 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from ._base import safe_relative_to
 from ..item import KBItem, Confidence, KnowledgeSource
 
 
@@ -43,12 +44,12 @@ class _PythonMixin:
                     "class_name": class_name,
                     "xpath_patterns": xpath_patterns,
                     "methods": methods,
-                    "source_file": str(path.relative_to(self.project_root)),
+                    "source_file": safe_relative_to(path, self.project_root),
                 },
                 confidence=Confidence(score=0.7, source=KnowledgeSource.STATIC_ANALYSIS),
                 description=f"Component AW: {class_name} with {len(methods)} methods",
                 tags=[class_name, "component"],
-                source_file=str(path.relative_to(self.project_root)),
+                source_file=safe_relative_to(path, self.project_root),
             ))
 
         return items
@@ -78,12 +79,12 @@ class _PythonMixin:
                 value={
                     "class_name": class_name,
                     "feature_points": feature_points,
-                    "source_file": str(path.relative_to(self.project_root)),
+                    "source_file": safe_relative_to(path, self.project_root),
                 },
                 confidence=Confidence(score=0.7, source=KnowledgeSource.STATIC_ANALYSIS),
                 description=f"Page: {class_name} with {len(feature_points)} feature points",
                 tags=[class_name, "page"],
-                source_file=str(path.relative_to(self.project_root)),
+                source_file=safe_relative_to(path, self.project_root),
             ))
 
         return items
@@ -116,13 +117,13 @@ class _PythonMixin:
                     "imports": imports,
                     "fixtures": fixtures,
                     "assertion_style": assertion_style,
-                    "source_file": str(path.relative_to(self.project_root)),
+                    "source_file": safe_relative_to(path, self.project_root),
                 },
                 confidence=Confidence(score=0.6, source=KnowledgeSource.STATIC_ANALYSIS),
                 description=f"Style conventions from {class_name}: {len(imports)} imports, "
                             f"{assertion_style} assertions",
                 tags=[class_name, "style", "convention"],
-                source_file=str(path.relative_to(self.project_root)),
+                source_file=safe_relative_to(path, self.project_root),
             ))
 
         return items

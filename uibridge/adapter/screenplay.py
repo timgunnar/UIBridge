@@ -95,11 +95,8 @@ class ScreenplayComponentResolver(ComponentResolver):
         return role_map.get(aria_role.lower(), "Target")
 
     def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
-        domain = extract_domain(url)
-        data_module = dom_attrs.get("data-module", "")
-        if data_module:
-            return data_module.replace("-", "_").upper()
-        return f"{domain}_{aria_role}".upper() if aria_role else "PAGE_ELEMENT"
+        raw = super().suggest_name(url, aria_role, dom_attrs)
+        return raw.upper() if aria_role else "PAGE_ELEMENT"
 
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:
         return self.METHOD_TEMPLATES.get(component_type, [

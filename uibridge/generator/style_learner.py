@@ -49,6 +49,24 @@ class StyleProfile:
     extends_class: str = ""
 
 
+def _safe_get_docstring(node: ast.AST) -> str | None:
+    """ast.get_docstring 安全版 — 捕获对非函数/类/模块节点的 TypeError"""
+    try:
+        return ast.get_docstring(node)
+    except TypeError:
+        return None
+
+
+def _is_fixture_decorator(d: ast.expr) -> bool:
+    """检测装饰器是否为 fixture 变体（@fixture / @pytest.fixture / @pytest_fixture 等）"""
+    if isinstance(d, ast.Name) and d.id == "fixture":
+        return True
+    if isinstance(d, ast.Attribute) and d.attr == "fixture":
+        # e.g., @pytest.fixture
+        return True
+    return False
+
+
 class StyleLearner:
     """学习项目中已有测试脚本的代码风格，支持 Python 和 Java"""
 
@@ -119,12 +137,13 @@ class StyleLearner:
                 for node in ast.walk(tree)
             )
             p.use_docstrings = any(
-                isinstance(node, ast.FunctionDef) and ast.get_docstring(node)
+                isinstance(node, ast.FunctionDef) and
+                _safe_get_docstring(node) is not None
                 for node in ast.walk(tree)
             )
             p.fixture_decorator = any(
                 isinstance(node, ast.FunctionDef) and
-                any(d.id == "fixture" for d in node.decorator_list if isinstance(d, ast.Name))
+                any(_is_fixture_decorator(d) for d in node.decorator_list)
                 for node in ast.walk(tree)
             )
             # 检测测试类前缀
@@ -153,7 +172,11 @@ class StyleLearner:
 
             # 检测文档字符串风格
             for node in ast.walk(tree):
-                doc = ast.get_docstring(node)
+                try:
+                    doc = ast.get_docstring(node)
+                except TypeError:
+                    # ast.get_docstring raises TypeError for nodes that can't have docstrings
+                    continue
                 if doc:
                     p.docstring_style = "triple_double" if '"""' in source else "triple_single"
                     break

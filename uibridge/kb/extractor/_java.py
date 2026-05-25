@@ -6,7 +6,34 @@ import warnings
 from pathlib import Path
 from typing import Optional
 
+from ._base import safe_relative_to
 from ..item import KBItem, Confidence, KnowledgeSource
+
+# Compiled regex for Java source parsing (hot path — called per file during KB seeding)
+_JAVA_SINGLE_COMMENT_RE = re.compile(r'//[^\n]*')
+_JAVA_BLOCK_COMMENT_RE = re.compile(r'/\*.*?\*/', re.DOTALL)
+_JAVA_PACKAGE_RE = re.compile(r'package\s+([\w.]+)\s*;')
+_JAVA_IMPORT_RE = re.compile(r'import\s+(static\s+)?([\w.*]+)\s*;')
+_JAVA_CLASS_RE = re.compile(
+    r'class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([\w\s,]+?))?\s*\{'
+)
+_JAVA_ANNOTATION_RE = re.compile(r'@(\w+)\s*(?:\([^)]*\))?')
+_JAVA_METHOD_RE = re.compile(
+    r'(?:public|private|protected|static|\s)+\s+(\w+(?:<[^>]+>)?)\s+(\w+)\s*\('
+)
+_JAVA_LOCATOR_ANNOTATION_RE = re.compile(
+    r'@(?:FindBy|DataModule|DataTestId|AndroidFindBy|iOSFindBy)'
+    r'\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)',
+    re.DOTALL
+)
+_JAVA_STRATEGY_RE = re.compile(
+    r'(id|xpath|css|name|className|tagName|linkText|partialLinkText'
+    r'|accessibility|uiAutomator|classChain|predicate)'
+    r'\s*=\s*"((?:[^"\\]|\\.)*)"'
+)
+_JAVA_HOW_USING_RE = re.compile(
+    r'how\s*=\s*\w+\.(\w+)\s*,\s*using\s*=\s*"([^"]*)"'
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +99,7 @@ class _JavaMixin:
             "package": package,
             "methods": methods,
             "annotations": annotations,
-            "source_file": str(path.relative_to(self.project_root)),
+            "source_file": safe_relative_to(path, self.project_root),
         }
         if base_class:
             value["base_class"] = base_class
@@ -99,7 +126,7 @@ class _JavaMixin:
                         + (f", type: {component_type}" if component_type else ""),
             tags=[class_name, "java", item_type.rstrip('s')]
                  + ([component_type] if component_type else []),
-            source_file=str(path.relative_to(self.project_root)),
+            source_file=safe_relative_to(path, self.project_root),
         ))
 
         return items
@@ -133,12 +160,12 @@ class _JavaMixin:
                     "package": package,
                     "imports": imports,
                     "annotations": annotations,
-                    "source_file": str(path.relative_to(self.project_root)),
+                    "source_file": safe_relative_to(path, self.project_root),
                 },
                 confidence=Confidence(score=0.6, source=KnowledgeSource.STATIC_ANALYSIS),
                 description=f"Java test style from {class_name}",
                 tags=[class_name, "java", "test", "style"],
-                source_file=str(path.relative_to(self.project_root)),
+                source_file=safe_relative_to(path, self.project_root),
             ))
 
         return items
@@ -184,25 +211,21 @@ class _JavaMixin:
         result = {}
 
         # 移除单行注释和块注释，避免干扰
-        cleaned = re.sub(r'//[^\n]*', '', source)
-        cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+        cleaned = _JAVA_SINGLE_COMMENT_RE.sub('', source)
+        cleaned = _JAVA_BLOCK_COMMENT_RE.sub('', cleaned)
 
         # 1. package
-        pkg_match = re.search(r'package\s+([\w.]+)\s*;', cleaned)
+        pkg_match = _JAVA_PACKAGE_RE.search(cleaned)
         if pkg_match:
             result["package"] = pkg_match.group(1)
 
         # 2. imports
-        imports = re.findall(r'import\s+(static\s+)?([\w.*]+)\s*;', cleaned)
+        imports = _JAVA_IMPORT_RE.findall(cleaned)
         if imports:
             result["imports"] = [imp[1] for imp in imports]
 
         # 3. class name + extends + implements
-        # 匹配: class ClassName extends BaseClass implements Iface1, Iface2 {
-        class_match = re.search(
-            r'class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([\w\s,]+?))?\s*\{',
-            cleaned
-        )
+        class_match = _JAVA_CLASS_RE.search(cleaned)
         if class_match:
             result["class_name"] = class_match.group(1)
             if class_match.group(2):
@@ -212,16 +235,15 @@ class _JavaMixin:
                 if implements:
                     result["implements"] = implements
         else:
-            return None  # 没有类定义，不返回
+            return None
 
         # 4. annotations (class-level and field-level)
-        # 匹配 @Override, @Test, @FindBy(...), @DataModule(...), etc.
-        annotations = re.findall(r'@(\w+)\s*(?:\([^)]*\))?', cleaned)
+        annotations = _JAVA_ANNOTATION_RE.findall(cleaned)
         if annotations:
-            result["annotations"] = list(set(annotations))  # 去重
+            result["annotations"] = list(set(annotations))
 
         # 5. method names
-        methods = re.findall(r'(?:public|private|protected|static|\s)+\s+(\w+(?:<[^>]+>)?)\s+(\w+)\s*\(', cleaned)
+        methods = _JAVA_METHOD_RE.findall(cleaned)
         if methods:
             result["methods"] = [
                 {"name": m[1], "returns": m[0], "params": [], "modifiers": []}
@@ -230,10 +252,7 @@ class _JavaMixin:
             ]
 
         # 6. locator annotations (Selenium/Appium style)
-        locator_annotations = re.findall(
-            r'@(?:FindBy|DataModule|DataTestId|AndroidFindBy|iOSFindBy)\s*\(([^)]*)\)',
-            cleaned, re.DOTALL
-        )
+        locator_annotations = _JAVA_LOCATOR_ANNOTATION_RE.findall(cleaned)
         if locator_annotations:
             result["locator_annotations"] = locator_annotations
 
@@ -405,10 +424,7 @@ class _JavaMixin:
                 logger.warning("Failed to read Java source for regex locator fallback: %s", path, exc_info=True)
                 pass
             if source:
-                raw_annotations = re.findall(
-                    r'@(?:FindBy|DataModule|DataTestId|AndroidFindBy|iOSFindBy)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)',
-                    source, re.DOTALL
-                )
+                raw_annotations = _JAVA_LOCATOR_ANNOTATION_RE.findall(source)
                 for raw in raw_annotations:
                     parsed = self._parse_locator_annotation(raw)
                     if parsed:
@@ -423,16 +439,14 @@ class _JavaMixin:
         """
         strategy = None
         # 匹配 strategy = "value" 模式
-        strategy_match = re.search(r'(id|xpath|css|name|className|tagName|linkText|partialLinkText'
-                                   r'|accessibility|uiAutomator|classChain|predicate)\s*=\s*"((?:[^"\\]|\\.)*)"',
-                                   raw_text)
+        strategy_match = _JAVA_STRATEGY_RE.search(raw_text)
         if strategy_match:
             strategy = strategy_match.group(1)
             value = strategy_match.group(2)
             return {"strategy": strategy, "value": value}
 
         # 匹配 how = ...  using = "value" 模式 (Selenium 旧风格)
-        how_match = re.search(r'how\s*=\s*\w+\.(\w+)\s*,\s*using\s*=\s*"([^"]*)"', raw_text)
+        how_match = _JAVA_HOW_USING_RE.search(raw_text)
         if how_match:
             return {"strategy": how_match.group(1).lower(), "value": how_match.group(2)}
 

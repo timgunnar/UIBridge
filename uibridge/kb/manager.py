@@ -211,6 +211,12 @@ class KBManager:
 
     def inject(self, category: str, key: str, value: dict, description: str) -> KBItem:
         """Direct human injection of a KB entry."""
+        if not isinstance(value, dict):
+            raise TypeError(f"inject() value 参数必须是 dict，收到 {type(value).__name__}")
+        if not isinstance(category, str) or not category:
+            raise ValueError("category 必须是非空字符串")
+        if not isinstance(key, str) or not key:
+            raise ValueError("key 必须是非空字符串")
         item = self.extractor.inject_convention(key, value, description)
         item.category = category
         item.id = f"human_{category}_{key.replace('.', '_')}"

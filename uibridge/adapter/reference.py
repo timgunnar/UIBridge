@@ -248,17 +248,6 @@ class ReferenceComponentResolver(ComponentResolver):
             return tag_map[tag]
         return "UnknownAW"
 
-    def suggest_name(self, url: str, aria_role: str, dom_attrs: dict) -> str:
-        """自动命名：URL 提取 domain + role 组合"""
-        domain = extract_domain(url)
-        role = aria_role or "element"
-        data_module = dom_attrs.get("data-module", "")
-        if data_module:
-            return data_module.replace("-", "_").replace(" ", "_")
-        name = f"{domain}_{role}".replace(" ", "_").lower()
-        # 去重：如果名字太通用，加数字后缀
-        return name if len(name) > 3 else f"{role}_{domain}"
-
     def get_methods_for_role(self, component_type: str, aria_role: str) -> list[MethodTemplate]:
         return self.METHOD_TEMPLATES.get(component_type, [
             MethodTemplate("click", [], "click"),

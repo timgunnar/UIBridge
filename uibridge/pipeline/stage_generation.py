@@ -306,15 +306,18 @@ class StageGeneration:
                 self._kb_items_used.add((item.category, item.id))
 
         # 组件类型映射：KB 注册的自定义组件名 → 替换默认 Target/PageElement
-        high_conf = self.kb_manager.get_high_confidence_knowledge()
-        for key, item in high_conf.items():
-            if key.startswith("component."):
-                default_name = item.get("aria_role", "")
-                custom_name = item.get("class_name", "")
+        component_items = self.kb_manager.get_high_confidence_knowledge()
+        for category, entries in component_items.items():
+            if category != "components":
+                continue
+            for comp_key, comp_data in entries.items():
+                if not isinstance(comp_data, dict):
+                    continue
+                default_name = comp_data.get("aria_role", "")
+                custom_name = comp_data.get("class_name", "")
                 if default_name and custom_name and default_name != custom_name:
                     steps = [s.replace(default_name, custom_name) for s in steps]
-                # Track each high-confidence component KB item used
-                entry = self.kb_manager.store.get_by_key("components", key)
+                entry = self.kb_manager.store.get_by_key("components", comp_key)
                 if entry:
                     self._kb_items_used.add((entry.category, entry.id))
 

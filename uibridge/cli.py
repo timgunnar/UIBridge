@@ -16,6 +16,15 @@ from .profile_manager import ProfileManager
 logger = logging.getLogger(__name__)
 
 
+def _load_adapter_safe(adapter_config):
+    """加载适配器，导入失败时输出错误并退出。"""
+    try:
+        return load_adapter(adapter_config)
+    except ImportError as e:
+        click.echo(f"[ERROR] {e}", err=True)
+        sys.exit(2)
+
+
 def _ensure_browser_or_die():
     """验证 Chromium 浏览器可用，不可用时打印错误并退出"""
     from . import check_browser_available
@@ -32,7 +41,7 @@ def _ensure_browser_or_die():
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.3.6")
+@click.version_option(version="0.3.7")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 
@@ -46,7 +55,7 @@ def record(url: str, output: str, headed: bool, adapter_config: str):
     """录制浏览器操作，输出标准化录制文件"""
     _ensure_browser_or_die()
 
-    resolver, locator, recognizer, code_gen, data_fmt = load_adapter(adapter_config)
+    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=not headed)
@@ -82,7 +91,7 @@ def record(url: str, output: str, headed: bool, adapter_config: str):
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def generate(input_file: str, output_dir: str, adapter_config: str):
     """从录制文件生成测试脚本"""
-    resolver, locator, recognizer, code_gen, data_fmt = load_adapter(adapter_config)
+    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
 
     # 读取录制
     from .engine.ir.raw_recording import RawRecording
@@ -136,7 +145,7 @@ def analyze(url: str, adapter_config: str):
     """分析页面，发现组件并输出注册表"""
     _ensure_browser_or_die()
 
-    resolver, locator, recognizer, code_gen, data_fmt = load_adapter(adapter_config)
+    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -170,7 +179,7 @@ def analyze(url: str, adapter_config: str):
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def diff(input_file: str, adapter_config: str):
     """分析录制快照差异，生成断言候选"""
-    resolver, locator, recognizer, code_gen, data_fmt = load_adapter(adapter_config)
+    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
 
     from .engine.ir.raw_recording import RawRecording
     data = json.loads(Path(input_file).read_text("utf-8"))

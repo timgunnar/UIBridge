@@ -4,7 +4,15 @@ import logging
 import re
 from pathlib import Path
 
+from ._base import safe_relative_to
 from ...profile import FrameworkProfile, ProfileField
+
+# Compiled regex for Java source profiling (hot path — called per file)
+_PROFILE_PACKAGE_RE = re.compile(r'^\s*package\s+([\w.]+)\s*;', re.MULTILINE)
+_PROFILE_CLASS_RE = re.compile(r'public\s+class\s+(\w+)')
+_PROFILE_EXTENDS_RE = re.compile(r'extends\s+(\w+)')
+_PROFILE_ANNOTATION_RE = re.compile(r'@(\w+)')
+_PROFILE_LOCATOR_RE = re.compile(r'By\.\w+|@FindBy|locator|Locator')
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +218,7 @@ class _ProfileMixin:
             return None
 
         info = {
-            "path": str(filepath.relative_to(self.project_root)),
+            "path": safe_relative_to(filepath, self.project_root),
             "package": "",
             "class_name": "",
             "extends": "",
@@ -220,22 +228,22 @@ class _ProfileMixin:
         }
 
         # Extract package
-        m = re.search(r'^\s*package\s+([\w.]+)\s*;', content, re.MULTILINE)
+        m = _PROFILE_PACKAGE_RE.search(content)
         if m:
             info["package"] = m.group(1)
 
         # Extract class name
-        m = re.search(r'public\s+class\s+(\w+)', content)
+        m = _PROFILE_CLASS_RE.search(content)
         if m:
             info["class_name"] = m.group(1)
 
         # Extract extends
-        m = re.search(r'extends\s+(\w+)', content)
+        m = _PROFILE_EXTENDS_RE.search(content)
         if m:
             info["extends"] = m.group(1)
 
         # Extract annotations
-        annotations = re.findall(r'@(\w+)', content)
+        annotations = _PROFILE_ANNOTATION_RE.findall(content)
         info["annotations"] = list(set(annotations))
 
         # Extract locator attributes
@@ -311,7 +319,7 @@ class _ProfileMixin:
         # Has locator patterns
         try:
             content = filepath.read_text("utf-8")
-            if re.search(r'By\.\w+|@FindBy|locator|Locator', content):
+            if _PROFILE_LOCATOR_RE.search(content):
                 return True
         except Exception:
             logger.warning("Failed to check UI relevance for file: %s", filepath, exc_info=True)
@@ -550,7 +558,7 @@ class _ProfileMixin:
             if not files:
                 continue
 
-            rel_path = str(target.relative_to(root)).replace("\\", "/")
+            rel_path = safe_relative_to(target, root).replace("\\", "/")
 
             # Mature: 3+ files with consistent naming
             if len(files) >= 3:
