@@ -26,6 +26,11 @@
 - `KNOWN_ISSUES.md` 移至 `OLD/`（48 项全部修复）
 - `CLAUDE.md` 清理所有 KNOWN_ISSUES 引用
 
+### 测试
+
+- 770 个测试全部通过（v0.3.6: 297 个）
+- 新增 473 个测试（custom_playwright_java 82 + kb_extractor 156 + aria_analyzer 54 + runtime_analyzer 39 + kb_manager 42 + style_learner 37 + mcp_helpers 63 + cli 19）
+
 ## v0.3.6
 
 ### 三个反馈信道
@@ -50,6 +55,10 @@
 - 删除 5 个向后兼容 shim（`kb_item.py` 等）
 - 删除死代码 `apply_nl_feedback()`
 - 全代码库 `kb_xxx` 导入统一为无前缀路径
+
+### 测试
+
+- 297 个测试全部通过（与 v0.3.5 一致，无行为变更）
 
 ## v0.3.5
 
@@ -399,4 +408,7 @@ MCP Server 工具总数：8 → 9（原有 `analyze_page` / `start_recording` / 
 - 知识库系统（KBStore / KBExtractor / KBManager / StyleLearner）
 - 自检系统（fix_and_retry 最多 3 次重试，5 条修正规则）
 - 4 组演示项目（Python A/B, Java C/D）
-- 107 个兼容性测试
+
+### 测试
+
+- 107 个兼容性测试全部通过

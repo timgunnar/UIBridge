@@ -310,9 +310,13 @@ def _scan_artifacts(cwd: Path) -> list[Path]:
 def _scan_system_artifacts() -> list[Path]:
     """扫描 Python 环境中可编辑安装遗留的 uibridge 残留文件。
 
-    pip uninstall 有时无法完全清理可编辑安装的文件，
-    导致 package 已卸载但 import 仍可用的状态。
+    仅当 uibridge 包已卸载但残留文件仍存在时才返回结果。
+    如果 uibridge 仍可导入，则可编辑安装文件属于正常存在，不算残留。
     """
+    from importlib.util import find_spec
+    if find_spec("uibridge") is not None:
+        return []
+
     artifacts = []
 
     try:
