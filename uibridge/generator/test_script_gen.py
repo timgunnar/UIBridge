@@ -4,7 +4,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from ..adapter.base import ScriptDef, CodeGenerator, TestDataDef, DataFormatter
+# ── Stub classes (adapter/ deleted in v0.4.0, moved to scanner+generator) ──
+class ScriptDef:
+    def __init__(self, class_name="", test_name="", description="", imports=None, fixtures=None, steps=None):
+        self.class_name = class_name; self.test_name = test_name; self.description = description
+        self.imports = imports or []; self.fixtures = fixtures or []; self.steps = steps or []
+class TestDataDef:
+    def __init__(self, file_path="", content=""):
+        self.file_path = file_path; self.content = content
+class CodeGenerator:
+    def generate_test_script(self, script_def, template_path=""): raise NotImplementedError
+class DataFormatter:
+    def format(self, values, context): return TestDataDef()
 
 
 class TestScriptGenerator:

@@ -4,7 +4,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from ..adapter.base import ComponentDef, MethodTemplate, CodeGenerator, ComponentResolver, sanitize_identifier
+# ── Stub classes (adapter/ deleted in v0.4.0, moved to scanner+generator) ──
+class ComponentDef:
+    def __init__(self, class_name="", module="", xpath="", methods=None, base_class="BaseAW"):
+        self.class_name = class_name; self.module = module; self.xpath = xpath
+        self.methods = methods or []; self.base_class = base_class
+class MethodTemplate:
+    def __init__(self, name="", params=None, action_type=""):
+        self.name = name; self.params = params or []; self.action_type = action_type
+class CodeGenerator:
+    def generate_component_aw(self, comp_def): raise NotImplementedError
+class ComponentResolver:
+    def get_methods_for_role(self, component_type, aria_role): return []
+def sanitize_identifier(name: str) -> str:
+    import re; return re.sub(r'[^a-zA-Z0-9_]', '_', name.lower()).strip('_') or 'field'
 
 
 class ComponentAWGenerator:

@@ -1,5 +1,7 @@
-"""uibridge — UI自动化测试脚本智能化自动生成系统"""
-__version__ = "0.3.7"
+"""uibridge — 给企业 UI 自动化框架装上 AI 接口"""
+__version__ = "0.4.0"
+
+from pathlib import Path
 
 
 def check_browser_available(browser_name: str = "chromium") -> tuple[bool, str]:

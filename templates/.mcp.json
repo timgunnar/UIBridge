@@ -3,12 +3,7 @@
     "uibridge": {
       "command": "python",
       "args": ["-m", "uibridge.mcp_server"],
-      "description": "UI 自动化测试脚本智能生成 — 录制浏览器操作 → 生成测试代码"
-    },
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp", "--headless"],
-      "description": "Playwright 浏览器自动化 — 用于页面分析和录制"
+      "description": "UI 自动化测试代码生成 — 录制浏览器操作 → 分层代码输出"
     }
   }
 }

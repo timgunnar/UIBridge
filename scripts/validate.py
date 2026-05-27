@@ -30,7 +30,7 @@ def check_tests_pass() -> bool:
 
 def check_adapter_interfaces() -> bool:
     try:
-        from uibridge.adapter.base import (
+        from uibridge.adapter.interfaces import (
             ComponentResolver, LocatorStrategy, ActionRecognizer,
             CodeGenerator, DataFormatter,
         )

@@ -13,8 +13,7 @@ from .store import KBStore
 from .extractor import KBExtractor
 from .evolution import KBEvolution
 from .freshness import FreshnessMonitor
-from .source_detection import SourceDetector
-from ..profile import FrameworkProfile, ProfileField
+# source_detection and profile moved to scanner/ in v0.4.0
 
 
 class KBManager:
@@ -82,11 +81,11 @@ class KBManager:
         return seeded
 
     def auto_detect_source_dirs(self) -> dict[str, str]:
-        """自动检测项目源码目录结构，支持 Java 和 Python 项目。
+        """[STUB v0.4.0] SourceDetector deleted. Returns empty dict.
 
-        委托 SourceDetector 执行实际检测逻辑。
+        Source detection moved to scanner/ module.
         """
-        return SourceDetector(str(self.project_root)).detect()
+        return {}
 
     def auto_seed(self) -> list[KBItem]:
         """自动播种 KB：优先两阶段聚合，回退传统逐文件扫描。

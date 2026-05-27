@@ -1,0 +1,44 @@
+# Selenium + JUnit detection template
+name: selenium_junit
+description: "Selenium WebDriver with JUnit (4/5) test framework"
+patterns:
+  file_patterns:
+    - "pom.xml"
+    - "**/junit-platform.properties"
+  import_patterns:
+    - "org.junit"
+    - "org.junit.jupiter.api.Test"
+    - "org.junit.jupiter.api.BeforeEach"
+    - "org.junit.jupiter.api.AfterEach"
+    - "org.junit.jupiter.api.BeforeAll"
+    - "org.junit.jupiter.api.AfterAll"
+    - "org.openqa.selenium"
+    - "org.openqa.selenium.WebDriver"
+    - "org.openqa.selenium.WebElement"
+  annotation_patterns:
+    - "@Test"
+    - "@BeforeEach"
+    - "@AfterEach"
+    - "@BeforeAll"
+    - "@AfterAll"
+    - "@Before"
+    - "@After"
+    - "@DisplayName"
+    - "@ParameterizedTest"
+  locator_patterns:
+    - "@FindBy"
+    - "By.id"
+    - "By.xpath"
+    - "By.cssSelector"
+    - "By.name"
+    - "By.className"
+  base_class_patterns:
+    - "BaseTest"
+    - "TestBase"
+    - "BasePage"
+    - "PageBase"
+  naming_conventions:
+    class_suffix: "Test"
+    method_prefix: "test"
+    field_style: "camelCase"
+confidence_boost: 0.20

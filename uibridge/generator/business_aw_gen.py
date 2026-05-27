@@ -4,7 +4,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from ..adapter.base import BAWDef, BAWOperationDef, CallDef, CodeGenerator, ActionRecognizer
+# ── Stub classes (adapter/ deleted in v0.4.0, moved to scanner+generator) ──
+class BAWDef:
+    def __init__(self, class_name="", module="", operations=None):
+        self.class_name = class_name; self.module = module; self.operations = operations or []
+class BAWOperationDef:
+    def __init__(self, name="", params=None, calls=None):
+        self.name = name; self.params = params or []; self.calls = calls or []
+class CallDef:
+    def __init__(self, component="", method="", args=None, data_binding=""):
+        self.component = component; self.method = method; self.args = args or []; self.data_binding = data_binding
+# CodeGenerator/ActionRecognizer stubs — these classes expect injected instances at runtime
+class CodeGenerator:
+    def generate_business_aw(self, baw_def): raise NotImplementedError
+class ActionRecognizer:
+    pass
 
 
 class BusinessAWGenerator:

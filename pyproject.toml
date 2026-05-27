@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uibridge"
-version = "0.3.7"
-description = "给你的企业 UI 自动化框架装上 AI 接口 — 学习团队约定，生成同风格的分层测试代码"
+version = "0.4.0"
+description = "给企业 UI 自动化框架装上 AI 接口 — 框架知识翻译层，持续静默学习，图结构知识库"
 requires-python = ">=3.9,<4.0"
 dependencies = [
     "playwright>=1.52.0,<2.0.0",

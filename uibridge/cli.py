@@ -8,21 +8,20 @@ from pathlib import Path
 import click
 from playwright.sync_api import sync_playwright
 
-from .pipeline import Pipeline
-from .adapter.loader import load_adapter
+# Removed imports (modules deleted):
+#   from .pipeline import Pipeline
+#   from .adapter.loader import load_adapter
+#   from .source_detection import SourceDetector
+#   from .profile_manager import ProfileManager
 from .kb.manager import KBManager
-from .profile_manager import ProfileManager
+from .kb.extractor import KBExtractor
 
 logger = logging.getLogger(__name__)
 
 
 def _load_adapter_safe(adapter_config):
-    """加载适配器，导入失败时输出错误并退出。"""
-    try:
-        return load_adapter(adapter_config)
-    except ImportError as e:
-        click.echo(f"[ERROR] {e}", err=True)
-        sys.exit(2)
+    """[STUB] 适配器加载已移除（adapter/ 目录已删除）。CLI 将在后续版本重写。"""
+    raise NotImplementedError("Adapter loading removed. CLI rewrite planned.")
 
 
 def _ensure_browser_or_die():
@@ -41,7 +40,7 @@ def _ensure_browser_or_die():
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.3.7")
+@click.version_option(version="0.4.0")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 
@@ -52,37 +51,9 @@ def cli():
 @click.option("--headed/--headless", default=True, help="是否显示浏览器窗口")
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def record(url: str, output: str, headed: bool, adapter_config: str):
-    """录制浏览器操作，输出标准化录制文件"""
-    _ensure_browser_or_die()
-
-    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=not headed)
-        context = browser.new_context(viewport={"width": 1280, "height": 800})
-        page = context.new_page()
-        page.goto(url)
-
-        profile_mgr = ProfileManager(".")
-        kb_mgr = KBManager(".", profile_manager=profile_mgr)
-        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt,
-                            project_root=".", kb_manager=kb_mgr, profile_manager=profile_mgr)
-        session = pipeline.record(page)
-
-        click.echo("=" * 60)
-        click.echo("[REC] 录制中... 在浏览器中操作，完成后按 Enter 结束")
-        click.echo("=" * 60)
-        input()
-
-        recording = session.to_raw_recording()
-        output_path = Path(output)
-        output_path.write_text(
-            json.dumps(recording.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        click.echo(f"\n[OK] 录制完成: {len(recording.steps)} 个步骤 -> {output_path}")
-
-        browser.close()
+    """[STUB] 录制浏览器操作。adapter/pipeline 已移除，CLI 将在后续版本重写。"""
+    click.echo("[ERROR] record 命令暂不可用。适配器和 pipeline 已移除，CLI 重写计划中。", err=True)
+    sys.exit(1)
 
 
 @cli.command()
@@ -90,107 +61,27 @@ def record(url: str, output: str, headed: bool, adapter_config: str):
 @click.option("--output-dir", "-o", default="generated", help="生成代码输出目录")
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def generate(input_file: str, output_dir: str, adapter_config: str):
-    """从录制文件生成测试脚本"""
-    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
-
-    # 读取录制
-    from .engine.ir.raw_recording import RawRecording
-    data = json.loads(Path(input_file).read_text("utf-8"))
-    recording = RawRecording.from_dict(data)
-
-    pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt)
-
-    # 分析
-    semantic = pipeline.analyze(recording)
-    click.echo(f"[ANALYZE] 场景分析: {len(semantic.scenarios)} 个场景")
-
-    # 框架映射
-    call_seq = pipeline.map_to_framework(semantic)
-    click.echo(f"[MAP] 框架映射: {len(call_seq.test_cases)} 个测试用例")
-
-    # 生成 + 自检
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    results = pipeline.generate_and_verify(call_seq, recording)
-
-    # 检测语言决定文件扩展名
-    ext = ".java" if getattr(pipeline.code_generator, "target_language", "python") == "java" else ".py"
-
-    passed = 0
-    for result in results:
-        test_file = out_dir / f"{result['test_name']}{ext}"
-        test_file.write_text(result["code"], encoding="utf-8")
-
-        if result["data_def"]:
-            data_file = out_dir / result["data_def"].file_path
-            data_file.parent.mkdir(parents=True, exist_ok=True)
-            data_file.write_text(result["data_code"], encoding="utf-8")
-
-        status_icon = "[OK]" if result["verify"].status == "passed" else "[WARN]"
-        click.echo(f"  {status_icon} {result['test_name']} ({result['verify'].status})")
-        if result["verify"].status != "passed":
-            click.echo(f"     错误: {result['verify'].stderr[:200]}")
-            passed += 0
-        else:
-            passed += 1
-
-    click.echo(f"\n[DONE] 生成完成: {passed}/{len(results)} 通过自检 → {out_dir}")
+    """[STUB] 从录制文件生成测试脚本。adapter/pipeline 已移除，CLI 将在后续版本重写。"""
+    click.echo("[ERROR] generate 命令暂不可用。适配器和 pipeline 已移除，CLI 重写计划中。", err=True)
+    sys.exit(1)
 
 
 @cli.command()
 @click.option("--url", required=True, help="待分析的页面 URL")
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def analyze(url: str, adapter_config: str):
-    """分析页面，发现组件并输出注册表"""
-    _ensure_browser_or_die()
-
-    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url)
-        page.wait_for_load_state("networkidle")
-
-        profile_mgr = ProfileManager(".")
-        kb_mgr = KBManager(".", profile_manager=profile_mgr)
-        pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt,
-                            project_root=".", kb_manager=kb_mgr, profile_manager=profile_mgr)
-        components = pipeline.discover_components(page)
-
-        click.echo(f"\n页面: {url}")
-        click.echo(f"发现 {len(components)} 个组件:\n")
-        for comp in components:
-            click.echo(f"  [{comp['type']}] {comp['name']}")
-            click.echo(f"    XPath: {comp['xpath']}")
-            click.echo(f"    ARIA:  {comp['aria_role']}")
-            if comp.get("inputs"):
-                click.echo(f"    Inputs: {len(comp['inputs'])}")
-                for inp in comp["inputs"][:5]:
-                    click.echo(f"      - {inp.get('name', '?')} ({inp.get('type', 'text')})")
-            click.echo()
-
-        browser.close()
+    """[STUB] 分析页面。adapter/pipeline 已移除，CLI 将在后续版本重写。"""
+    click.echo("[ERROR] analyze 命令暂不可用。适配器和 pipeline 已移除，CLI 重写计划中。", err=True)
+    sys.exit(1)
 
 
 @cli.command()
 @click.option("--input", "-i", "input_file", default="recording.json", help="录制文件")
 @click.option("--adapter-config", default=None, help="适配器配置文件路径")
 def diff(input_file: str, adapter_config: str):
-    """分析录制快照差异，生成断言候选"""
-    resolver, locator, recognizer, code_gen, data_fmt = _load_adapter_safe(adapter_config)
-
-    from .engine.ir.raw_recording import RawRecording
-    data = json.loads(Path(input_file).read_text("utf-8"))
-    recording = RawRecording.from_dict(data)
-
-    pipeline = Pipeline(resolver, locator, recognizer, code_gen, data_fmt)
-    candidates = pipeline.diff_snapshots(recording)
-
-    click.echo(f"\n断言候选 ({len(candidates)} 个):\n")
-    for i, c in enumerate(candidates, 1):
-        click.echo(f"  [{i}] {c}")
+    """[STUB] 分析录制快照差异。adapter/pipeline 已移除，CLI 将在后续版本重写。"""
+    click.echo("[ERROR] diff 命令暂不可用。适配器和 pipeline 已移除，CLI 重写计划中。", err=True)
+    sys.exit(1)
 
 
 @cli.command()

@@ -1,33 +1,16 @@
-# .uibridge/adapter.yaml — 适配器配置
+# .uibridge/adapter.yaml — 项目配置
 # 放到企业项目根目录的 .uibridge/ 子目录下
-#
-# 本文件告诉 uibridge 三件事：
-#   1. 用哪套适配器（5 个接口的实现类）
-#   2. 生成代码放到哪个目录
-#   3. 项目的语言、框架、构建工具
-
-adapter:
-  name: "enterprise-java-testng"
-  version: "1.0"
-
-  # ── 5 个适配器接口实现 ──
-  components:
-    resolver: "uibridge.adapter.java_testng.JavaComponentResolver"
-    locator: "uibridge.adapter.java_testng.JavaLocatorStrategy"
-    recognizer: "uibridge.adapter.java_testng.JavaActionRecognizer"
-    generator: "uibridge.adapter.java_testng.JavaCodeGenerator"
-    data_formatter: "uibridge.adapter.java_testng.JavaDataFormatter"
-
-  # ── 输出目录（相对于项目根目录）──
-  paths:
-    component_aw_dir: "src/main/java/{{ base_package }}/components/"
-    page_dir: "src/main/java/{{ base_package }}/pages/"
-    test_dir: "src/test/java/{{ base_package }}/tests/"
-    test_data_dir: "src/test/java/{{ base_package }}/data/"
 
 # ── 项目基本信息 ──
 project:
-  language: java
-  test_framework: testng
-  build_tool: maven
-  base_package: com.enterprise  # 自动从项目源码扫描推断，无需手动修改
+  language: java          # java | python
+  test_framework: testng  # testng | junit | pytest
+  build_tool: maven       # maven | gradle | pip
+  base_package: ""        # 首次 seed_knowledge_base 时自动推断
+
+# ── 生成代码输出目录（相对于项目根目录）──
+output:
+  component_aw_dir: "generated/components/"
+  business_aw_dir: "generated/business/"
+  test_dir: "generated/tests/"
+  test_data_dir: "generated/data/"

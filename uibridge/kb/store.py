@@ -191,6 +191,25 @@ class KBStore:
         return [i for i in self.list_all()
                 if i.confidence.effective_score >= min_score and not i.archived]
 
+    def search_by_tag(self, tag: str) -> list[KBItem]:
+        """Find all active KBItems that have the given tag."""
+        tag_lower = tag.lower()
+        results = []
+        for item in self.list_all():
+            if not item.archived:
+                for t in item.tags:
+                    if t.lower() == tag_lower:
+                        results.append(item)
+                        break
+        return sorted(results, key=lambda i: i.confidence.effective_score, reverse=True)
+
+    def search_by_category(self, category: str) -> list[KBItem]:
+        """Find all active KBItems in the given category."""
+        if category not in CATEGORIES:
+            return []
+        items = self.list_category(category)
+        return [i for i in items if not i.archived]
+
     # ── Summary ──────────────────────────────────────
 
     def summarize(self) -> str:

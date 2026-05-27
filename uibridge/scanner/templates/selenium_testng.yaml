@@ -1,0 +1,41 @@
+# Selenium + TestNG detection template
+name: selenium_testng
+description: "Selenium WebDriver with TestNG test framework"
+patterns:
+  file_patterns:
+    - "pom.xml"
+    - "testng.xml"
+    - "**/testng.xml"
+  import_patterns:
+    - "org.testng"
+    - "org.testng.annotations.Test"
+    - "org.testng.annotations.BeforeClass"
+    - "org.testng.annotations.AfterClass"
+    - "org.openqa.selenium"
+    - "org.openqa.selenium.WebDriver"
+    - "org.openqa.selenium.WebElement"
+  annotation_patterns:
+    - "@Test"
+    - "@BeforeClass"
+    - "@AfterClass"
+    - "@BeforeMethod"
+    - "@AfterMethod"
+    - "@BeforeSuite"
+    - "@AfterSuite"
+  locator_patterns:
+    - "@FindBy"
+    - "By.id"
+    - "By.xpath"
+    - "By.cssSelector"
+    - "By.name"
+    - "By.className"
+  base_class_patterns:
+    - "BaseTest"
+    - "TestBase"
+    - "BasePage"
+    - "PageBase"
+  naming_conventions:
+    class_suffix: "Test"
+    method_prefix: "test"
+    field_style: "camelCase"
+confidence_boost: 0.20

@@ -1,20 +1,17 @@
 # CLAUDE.md — 企业 UI 自动化项目 Agent 对接文件
-#
-# 将本文件放到企业项目的根目录，Claude Code 启动时会自动加载。
-# Agent 通过本文件了解如何调用 uibridge 框架知识翻译层。
-#
-# 三种对接方式（按推荐度排序）:
-#   A. MCP Server (推荐) — 在 .mcp.json 注册，Agent 获得类型化工具
-#   B. CLI 命令 (兜底)   — Agent 通过 Bash 直接调用 uibridge 命令
-#   C. Skill (可选)      — 在 .claude/skills/ 下安装 uibridge skill
 
-## 可用工具
+将本文件放到企业项目的根目录，Claude Code 启动时会自动加载。
+Agent 通过本文件了解如何调用 uibridge 框架知识翻译层。
 
-本项目对接了 **uibridge** — 给企业框架装上 AI 接口的翻译层。它学习你的框架约定，把浏览器操作翻译成符合你团队风格的分层结构化测试代码，人和 AI 都能持续维护。
+## uibridge 简介
 
-### 方式 A: MCP Server（推荐 — 开箱即用）
+uibridge 给企业 UI 自动化框架装上 AI 接口。它学习你团队的框架封装（TableAW、@FindBy
+等），把浏览器操作翻译成符合团队风格的分层测试代码 — ComponentAW → BusinessAW →
+TestScript + TestData，人和 AI 都能持续维护。
 
-在项目的 `.mcp.json` 中注册：
+## 对接方式：MCP Server
+
+在项目 `.mcp.json` 中注册 uibridge：
 
 ```json
 {
@@ -27,36 +24,57 @@
 }
 ```
 
-注册后 Agent 自动获得 10 个类型化工具：
+注册后 Agent 获得 21 个类型化 MCP 工具：
 
-| MCP 工具 | 参数 | 用途 |
-|---------|------|------|
-| `analyze_page` | `url`, `adapter_config?` | 分析页面组件（无头浏览器，独立于录制） |
-| `open_browser` | `url` | 打开可见浏览器（不录制），用户做预置操作 |
-| `start_recording` | `adapter_config?` | 在已打开的浏览器上开始录制 |
-| `stop_recording` | `output_file?` | 停止录制，保存文件，关闭浏览器 |
-| `generate_test_code` | `input_file?`, `output_dir?`, `adapter_config?` | 生成测试代码 + 自检 |
-| `diff_snapshots` | `input_file?` | 对比快照，生成断言候选 |
-| `seed_knowledge_base` | `project_dir` | 扫描源码播种 KB |
-| `query_knowledge_base` | `query`, `project_dir?` | 查询框架约定 |
-| `update_knowledge_base` | `instruction`, `project_dir?` | NL 对话式知识库增删改查 |
-| `check_environment` | (无) | 检查 Playwright 浏览器等运行环境 |
+### 录制工具
 
-### 方式 B: CLI 命令（兜底）
-
-如果 MCP Server 不可用，Agent 用 Bash 直调 CLI：
-
-| 命令 | 用途 |
+| 工具 | 用途 |
 |------|------|
-| `uibridge analyze --url <URL>` | 分析页面组件 |
-| `uibridge record --url <URL> --headed` | 录制操作 |
-| `uibridge generate -i <文件> -o <目录>` | 生成代码 |
-| `uibridge diff -i <文件>` | 断言候选 |
+| `open_browser(url)` | 打开可见浏览器（不录制），用户预置操作 |
+| `start_recording()` | 在已打开的浏览器上开始录制 |
+| `stop_recording(output_file?)` | 停止录制，保存文件，关闭浏览器 |
+| `analyze_page(url)` | 无头分析页面组件结构 |
+
+### 生成工具
+
+| 工具 | 用途 |
+|------|------|
+| `generate_test_code(input_file?, output_dir?)` | 生成分层测试代码 + 自检 |
+| `diff_snapshots(input_file?)` | 对比快照，生成断言候选 |
+| `review_generated_code(session_id, feedback)` | 代码审查反馈 |
+| `regenerate_code(session_id)` | 从持久化 IR 重新生成 |
+| `regenerate_from_session(session_id)` | 从录制会话重新生成 |
+
+### 知识库工具
+
+| 工具 | 用途 |
+|------|------|
+| `seed_knowledge_base(project_dir?)` | 扫描源码播种 KB |
+| `query_knowledge_base(query)` | 搜索 KB 条目 |
+| `update_knowledge_base(instruction)` | NL 对话式 KB 增删改查 |
+| `add_kb_rule(category, key, value, description?)` | 添加 KB 规则 |
+| `modify_kb_rule(category, key, value)` | 修改 KB 规则 |
+| `delete_kb_rule(category, key)` | 删除 KB 规则 |
+| `query_kb_rules(category?, query?)` | 结构化查询 KB 规则 |
+
+### 画像工具
+
+| 工具 | 用途 |
+|------|------|
+| `get_profile()` | 获取当前项目框架画像 |
+| `update_profile(field, value)` | 更新画像字段 |
+| `get_project_layout()` | 获取项目布局信息 |
+
+### 环境工具
+
+| 工具 | 用途 |
+|------|------|
+| `check_environment()` | 检查运行环境（Python、Playwright 浏览器等） |
+| `list_sessions()` | 列出历史录制会话 |
 
 ## 项目框架信息
 
 - **语言/框架**: Java + TestNG + Maven  <!-- 按实际修改 -->
-- **适配器配置**: `.uibridge/adapter.yaml`
 - **源码目录**:
   - 页面对象: `src/main/java/**/pages/`
   - 测试代码: `src/test/java/**/tests/`
@@ -66,106 +84,45 @@
 
 ### 首次接入
 
-1. 确保 `pip install -e .` 已在 uibridge 目录执行
-2. 检查 `.uibridge/adapter.yaml` 存在（没有则从 uibridge 的 `templates/adapter.yaml` 复制，base_package 由 uibridge 自动扫描推断）
-3. KB 会在首次使用 `analyze_page` / `generate_test_code` 时自动播种（无需手动调用）。如需显式触发：`seed_knowledge_base(project_dir=".")`
-4. 报告发现了多少组件、页面、约定
+1. 确保 uibridge 已安装：`pip show uibridge`
+2. 调用 `check_environment()` 验证运行环境
+3. 调用 `seed_knowledge_base(project_dir=".")` 扫描项目源码，播种知识库
+4. Agent 报告发现了多少组件、页面、约定
 
-### 录制新功能测试（三段式）
+### 录制新功能测试
 
-**关键原则：录制全程只用 uibridge 的浏览器，不要用 Playwright MCP 的 `browser_navigate`。**
-
-1. 调用 `analyze_page(url=...)` 了解页面组件（无头浏览器，不影响录制）
-2. 调用 `open_browser(url=...)` 打开可见浏览器（此时不录制）
-3. 告诉用户"浏览器已打开，请先做预置操作（登录、导航等），准备好后告诉我"
-4. **等待用户告知预置完成**
-5. 调用 `start_recording()` 在已打开的浏览器上开始录制
-6. 告诉用户"录制中，请操作。完成后告诉我"
-7. **等待用户告知操作完成**
-8. 调用 `stop_recording()` 结束录制，保存 recording.json
-9. 调用 `generate_test_code()` 生成代码 + 自检
-10. 将生成的代码从 `generated/` 移动到正确的 Maven 目录
-11. 如有自检失败，分析原因并修复
-12. 报告用户结果。鼓励用户审查生成的代码，如有问题告知 Agent 修正。
+1. 调用 `open_browser(url=...)` 打开可见浏览器
+2. 告诉用户"浏览器已打开，请先做预置操作（登录、导航等），准备好后告诉我"
+3. 等待用户告知预置完成
+4. 调用 `start_recording()` 开始录制
+5. 告诉用户"录制中，请操作。完成后告诉我"
+6. 等待用户告知操作完成
+7. 调用 `stop_recording()` 结束录制，保存 recording.json
+8. 调用 `generate_test_code()` 生成代码 + 自检
+9. 报告用户结果。鼓励用户审查生成的代码，如有问题告知 Agent 修正
 
 ### 维护已有测试
 
-1. `analyze_page(url=...)` 对比新旧组件
+1. `analyze_page(url=...)` 了解当前页面组件
 2. 重新录制受影响的功能
 3. `generate_test_code()` 重新生成
-4. 更新受影响的已有测试
+4. 通过 `query_knowledge_base()` 或 KB CRUD 工具更新知识库
 
-## 自定义适配器（预置适配器不匹配时）
+### 知识库维护
 
-如果 `.uibridge/adapter.yaml` 中配置的 5 组预置适配器（reference / screenplay / java_testng / java_fluent / custom_playwright_java）都不匹配本项目的框架风格，Agent 需要判断**改什么**。
+KB 存储在 `.uibridge/kb/` 下，YAML 格式，可读可改可 commit。
 
-### 决策树：按这个顺序判断
+- 查询："表格组件的定位方式是什么？" → `query_knowledge_base("表格 定位")`
+- 添加："新增规则：弹窗用 role='dialog' 识别" → `add_kb_rule(...)`
+- 修改："定位器应该用 data-testid" → `modify_kb_rule(...)`
+- 删除："删掉登录流程的规则" → `delete_kb_rule(...)`
+- NL 对话式操作（自动识别意图）：`update_knowledge_base("定位器优先级改为 data-testid > id")`
 
-```
-企业框架分析结果
-    │
-    ├─ 与 5 组 demo 相似 >80%？
-    │   → 直接用预置适配器。修改 adapter.yaml 即可，无需写代码。
-    │
-    ├─ 有独特命名/import/目录约定，但"组件→定位→操作→断言"结构不变？
-    │   → seed_knowledge_base + StyleLearner 学习，KB 自动反馈到生成。不改核心。
-    │
-    ├─ 有自定义注解、组件工厂、链式等待、Builder、泛型、BDD、非英文命名……但仍是"组件→定位→操作→断言"？
-    │   → 写自定义适配器（只改 5 个接口 + Jinja2 模板），不动核心引擎。
-    │   详见下方"第一步"。
-    │
-    ├─ 框架抽象概念无法用现有 IR 数据结构表达？
-    │   → 小改 IR 数据结构（engine/ir/framework_call.py 或 adapter/base.py，加字段/枚举值）。
-    │   必须有默认值、向后兼容。不动引擎逻辑。详见 ADAPTER_GUIDE.md §需要扩展 IR 数据结构的信号。
-    │
-    └─ 非浏览器 UI / 非 UI 测试 / 框架没有组件抽象？
-        → uibridge 不适用。诚实告知用户原因。
-```
-
-**核心认知**：通用引擎只生产数据（ScriptDef / ComponentDef 等），适配器决定怎么变成代码。Jinja2 模板完全自由。绝大多数"复杂"落在第三行——写适配器就够了，核心一行不改。
-
-### 第一步：定位 uibridge 源码
-
-```bash
-# 找到 uibridge 的安装位置（pip install -e . 后为可编辑安装）
-python -c "import uibridge; from pathlib import Path; print(Path(uibridge.__file__).parent.parent)"
-```
-
-该目录下包含：
-- `docs/adapter-guide.md` — **适配器开发完整指南（必读，含 4 个 Phase 的详细步骤）**
-- `uibridge/adapter/base.py` — 5 个接口定义 + 数据结构
-- `uibridge/adapter/` — 5 组已有适配器参考实现
-- `docs/` — 完整文档（用户手册、KB 维护、LLM 对接等）
-
-### 第二步：按 docs/adapter-guide.md 的 4 个 Phase 执行
-
-```
-Phase 1: 分析项目   → 读取 pom.xml / 页面对象 / 测试文件 / 数据文件 → 确定框架特征
-Phase 2: 映射接口   → 按 5 个接口逐一实现（Resolver / Locator / Recognizer / Generator / Formatter）
-Phase 3: 生成文件   → 写入 uibridge/adapter/custom_<project>.py + tests/
-Phase 4: 验证       → python -m pytest tests/test_custom_<project>.py -v
-```
-
-### 第三步（关键）：注册适配器
-
-验证通过后，更新 `.uibridge/adapter.yaml` 的 `components` 段，5 个 key 对应 5 个接口：
-
-```yaml
-components:
-  resolver: "uibridge.adapter.custom_myproject.MyComponentResolver"
-  locator: "uibridge.adapter.custom_myproject.MyLocatorStrategy"
-  recognizer: "uibridge.adapter.custom_myproject.MyActionRecognizer"
-  generator: "uibridge.adapter.custom_myproject.MyCodeGenerator"
-  data_formatter: "uibridge.adapter.custom_myproject.MyDataFormatter"
-```
-
-key 名不可改：`resolver` / `locator` / `recognizer` / `generator` / `data_formatter`。
-详细格式和验证命令见 docs/adapter-guide.md Phase 5。
+KB 会随使用持续演化 — 自检通过的 knowledge confidence 上升，失败则下降。
 
 ## 关键约定
 
-- 录制文件默认 `recording.json`
-- 生成代码默认输出 `generated/`，然后移入 Maven 目录
-- 适配器配置在 `.uibridge/adapter.yaml`，用户明确要求才改
-- 生成的代码风格要匹配已有测试
-- Java 文件包名和目录结构要一致
+- 录制文件默认 `recording.json`，保存在项目根目录
+- 生成代码默认输出 `generated/`，然后移入正确的源码目录
+- 包名从项目结构自动推断，无需手动配置
+- 生成的代码风格通过 StyleLearner 从项目已有测试自动学习

@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from ..profile import ProfileField
+from .profile_extractor import ProfileField
 from .store import KBStore
 
 

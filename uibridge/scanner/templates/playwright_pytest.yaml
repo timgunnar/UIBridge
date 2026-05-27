@@ -1,0 +1,42 @@
+# Playwright + pytest detection template
+name: playwright_pytest
+description: "Playwright browser automation with pytest test framework"
+patterns:
+  file_patterns:
+    - "pyproject.toml"
+    - "setup.py"
+    - "setup.cfg"
+    - "conftest.py"
+    - "pytest.ini"
+  import_patterns:
+    - "pytest"
+    - "playwright"
+    - "playwright.sync_api"
+    - "playwright.async_api"
+    - "pytest_playwright"
+  annotation_patterns:
+    - "@pytest.fixture"
+    - "@pytest.mark"
+    - "@pytest.mark.parametrize"
+    - "@pytest.mark.skip"
+    - "@pytest.mark.xfail"
+  locator_patterns:
+    - ".locator"
+    - ".get_by_role"
+    - ".get_by_text"
+    - ".get_by_test_id"
+    - ".get_by_label"
+    - ".get_by_placeholder"
+    - ".get_by_alt_text"
+    - ".get_by_title"
+  base_class_patterns:
+    - "BasePage"
+    - "PageObject"
+    - "BaseTest"
+  naming_conventions:
+    class_suffix: "Page"
+    method_prefix: "test_"
+    function_prefix: "test_"
+    field_style: "snake_case"
+    file_style: "snake_case"
+confidence_boost: 0.20
