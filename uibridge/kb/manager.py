@@ -30,14 +30,21 @@ class KBManager:
     # Seed Phase
     # ══════════════════════════════════════════════════════════
 
-    def seed_from_static_analysis(self, source_dirs: dict[str, str]) -> list[KBItem]:
+    def seed_from_static_analysis(self, source_dirs: dict[str, str],
+                                   filter_ui: bool = True) -> list[KBItem]:
         """Bulk seed KB from static analysis of source directories.
 
         source_dirs: {"component_aw": "aaw/", "pages": "pages/", "tests": "tests/"}
 
         自动检测 Python (.py) 和 Java (.java) 文件并使用对应的提取器。
+        filter_ui=True 时，先用 UIRelevanceFilter 排除非 UI 文件（DTO/Util/Config 等噪声）。
         """
         seeded = []
+
+        ui_filter = None
+        if filter_ui:
+            from uibridge.scanner.filter import UIRelevanceFilter
+            ui_filter = UIRelevanceFilter(self.project_root)
 
         for category, dir_path in source_dirs.items():
             target_dir = self.project_root / dir_path
@@ -47,6 +54,11 @@ class KBManager:
             # 优先 Python，其次 Java
             py_files = list(target_dir.glob("**/*.py"))
             java_files = list(target_dir.glob("**/*.java"))
+
+            # Pre-filter to UI-relevant files only
+            if ui_filter:
+                py_files = ui_filter.filter(py_files, min_signals=2)
+                java_files = ui_filter.filter(java_files, min_signals=2)
 
             if py_files:
                 for path in py_files:

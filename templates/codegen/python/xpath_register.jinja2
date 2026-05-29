@@ -1,0 +1,17 @@
+{# xpath_register 模板 — XPath 注册文件 #}
+{%- set q = naming.quote_char -%}
+"""XPath 注册表 — 自动生成的元素定位器"""
+
+{%- if def.xpaths %}
+XPATH_MAP = {
+{%- for item in def.xpaths %}
+{%- if item is mapping %}
+    {{ q }}{{ item.name }}{{ q }}: {{ q }}{{ item.xpath }}{{ q }},
+{%- else %}
+    {{ q }}{{ item }}{{ q }}: {{ q }}{{ item }}{{ q }},
+{%- endif %}
+{%- endfor %}
+}
+{%- else %}
+XPATH_MAP = {}
+{%- endif %}

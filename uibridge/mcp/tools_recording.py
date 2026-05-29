@@ -188,21 +188,90 @@ async def open_browser(
 async def start_recording(
     adapter_config: Optional[str] = None,
 ) -> str:
-    """[REDESIGNING v0.4.0] 录制功能暂不可用。
+    """开始录制用户操作。
 
-录制引擎 (adapter/pipeline) 已移除，正在由 browser/ 模块重新实现（v0.4.0）。
-当前仅支持 open_browser → stop_recording 的基本浏览器控制流，
-录制功能将在 browser/ 模块完成后恢复。
+    三段式流程的第二步。在已打开的浏览器上注入录制 JS，
+    用户在此之后的所有操作（点击、输入、导航等）都会被捕获。
 
-Args:
-    adapter_config: 暂未使用
-"""
-    return json.dumps({
-        "status": "unavailable",
-        "version": "0.4.0",
-        "message": "录制功能正在重构中（v0.4.0）。start_recording 将在 browser/ 模块完成后恢复。",
-        "hint": "当前可通过 open_browser 打开浏览器手动探索，或使用 KB 工具维护知识库。",
-    }, indent=2, ensure_ascii=False)
+    三段式流程: open_browser → start_recording → [用户操作] → stop_recording
+
+    参数：
+    - adapter_config: 保留参数，当前未使用（v0.5.0 用于 locator_attrs 配置）
+    返回：录制状态 JSON（session_id、当前 URL）。
+    """
+    from uibridge.browser import RecordingSession
+
+    def _sync():
+        with _state.get_recording_lock():
+            staging = _state.get_active_browser_staging()
+            if not staging:
+                return json.dumps({
+                    "error": "没有打开的浏览器。请先调用 open_browser 打开浏览器。",
+                }, indent=2, ensure_ascii=False)
+
+            # 已在进行中的录制
+            if _state.get_active_recording():
+                return json.dumps({
+                    "error": "录制已在进行中。请先调用 stop_recording 结束当前录制。",
+                }, indent=2, ensure_ascii=False)
+
+            # 取消 staging 超时定时器
+            timer = staging.get("_timeout_timer")
+            if timer:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+
+            # 消费 staging 状态
+            page = staging["page"]
+            context = staging["context"]
+            pw = staging["pw"]
+            session_id = staging["session_id"]
+            _state.set_active_browser_staging(None)
+
+            # 实例化 RecordingSession — 构造时即注入 JS 并开始录制
+            session = RecordingSession(page, enable_runtime=True)
+
+            # 10 分钟自动停止保护
+            def _auto_stop():
+                with _state.get_recording_lock():
+                    active = _state.get_active_recording()
+                    if active and active.get("session_id") == session_id:
+                        try:
+                            active["session"].stop()
+                        except Exception:
+                            logger.warning("Auto-stop recording failed", exc_info=True)
+                        try:
+                            active["context"].close()
+                        except Exception:
+                            pass
+                        try:
+                            active["pw"].stop()
+                        except Exception:
+                            pass
+                        _state.set_active_recording(None)
+
+            rec_timer = threading.Timer(RECORDING_TIMEOUT, _auto_stop)
+            rec_timer.daemon = True
+            rec_timer.start()
+
+            _state.set_active_recording({
+                "session": session,
+                "session_id": session_id,
+                "page": page,
+                "context": context,
+                "pw": pw,
+                "_timeout_timer": rec_timer,
+            })
+
+        return json.dumps({
+            "status": "recording",
+            "session_id": session_id,
+            "hint": "录制中。用户完成操作后调用 stop_recording 结束录制并保存。",
+        }, indent=2, ensure_ascii=False)
+
+    return await _state.run_pw(_sync)
 
 
 @mcp.tool()

@@ -273,9 +273,6 @@ class KBExtractor:
 
     # ── Internal delegation: Aggregation extractor ──
 
-    def _quick_ui_check(self, content: str) -> bool:
-        return self._aggregation._quick_ui_check(content)
-
     def _extract_page_index(self, page_files, profile):
         return self._aggregation._extract_page_index(page_files, profile)
 

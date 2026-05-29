@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## v0.4.1
+
+### scanner 噪声过滤 + generator 模板引擎 + 录制恢复
+
+- **scanner/** 新增 `UIRelevanceFilter` — 五维信号判定（PATH + NAMING + INHERITANCE + ANNOTATION + LOCATOR），至少 2 个独立信号命中才认定为 UI 文件，消除 KB 噪声
+- **generator/** 新增 `engine.py`（CodeGenerator Jinja2 ChoiceLoader）+ 10 模板（Python/Java × 5 类型），3 个 `*_gen.py` 已对接；`_build_context()` 对接 KB 查询 naming/imports/assertions/locators 四类 convention，生成代码消费团队知识
+- **browser/** `start_recording` 从 stub 恢复为 RecordingSession 实时注入，三段式录制全流程打通
+- **mcp/** `generate_test_code` 从 stub 改为对接 CodeGenerator；`start_recording` 恢复
+- **kb/** 移除 ad-hoc `_quick_ui_check()`，委托给 scanner UIRelevanceFilter
+
+### 测试
+
+- 643 个测试全部通过（v0.4.0: 551 个）
+- 新增 95 个 scanner filter 测试，移除 3 个旧 `_quick_ui_check` 测试
+
+---
+
 ## v0.4.0
 
 ### 架构重构：五大引擎 + MCP 接口
@@ -15,11 +32,15 @@ uibridge 重构为五个独立引擎模块，按职责清晰拆分：
 
 ### 关键变更
 
-- scanner/ 新模块（discover.py + parser.py + 7 primitives + 3 templates）
+- scanner/ 新模块（discover.py + parser.py + 7 primitives + 3 templates + **UIRelevanceFilter**）
+- scanner/ **噪声过滤**：UIRelevanceFilter 五维信号判定（PATH + NAMING + INHERITANCE + ANNOTATION + LOCATOR），至少 2 个独立信号命中才认定为 UI 文件，消除 KB 噪声
 - nl/ 新模块（doc_ingest.py + intent_handler.py + dialogue.py）
 - kb/ 新增 graph.py + cross_validate.py
 - kb/ extractor 重构：Mixin 继承 → 组合模式
-- mcp/ 去 stub 化：KB/Profile/Env 工具全部返回真实数据
+- kb/ 移除 ad-hoc `_quick_ui_check()`，委托给 scanner UIRelevanceFilter
+- **browser/ 录制恢复**：`start_recording` 从 stub 改为 RecordingSession 实时注入，三段式录制全流程打通
+- **generator/ 模板引擎**：新建 `engine.py`（CodeGenerator Jinja2 引擎）+ 10 模板（Python/Java × 5 类型），3 个 `*_gen.py` 已对接
+- mcp/ 去 stub 化：KB/Profile/Env 工具全部返回真实数据；`start_recording` 恢复；`generate_test_code` 从 stub 改为对接生成引擎
 - 模板文件更新：CLAUDE.md、.mcp.json、adapter.yaml
 
 ### 删除
@@ -31,8 +52,8 @@ uibridge 重构为五个独立引擎模块，按职责清晰拆分：
 
 ### 测试
 
-- 551 个测试全部通过（v0.3.7: 338 个）
-- 新增 213 个测试（scanner 94 + nl 70 + kb_graph 49）
+- 643 个测试全部通过（v0.3.7: 338 个）
+- 新增 305 个测试（scanner 94 + scanner_filter 95 + nl 70 + kb_graph 49，移除 3 旧 _quick_ui_check 测试）
 
 ---
 

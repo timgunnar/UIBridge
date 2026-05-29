@@ -1,0 +1,26 @@
+{%- if style.package_name %}
+package {{ style.package_name }};
+{% endif %}
+
+/**
+ * {{ def.class_name }} - 自动生成的业务操作封装
+ */
+public class {{ def.class_name }} {
+
+    private final Page page;
+{%- for operation in def.operations %}
+{%- for call in operation.calls %}
+    private final {{ call.component }} {{ call.component.lower() }};
+{%- endfor %}
+{%- endfor %}
+
+    public {{ def.class_name }}(Page page{% for operation in def.operations %}{% for call in operation.calls %}, {{ call.component }} {{ call.component.lower() }}{% endfor %}{% endfor %}) {
+        this.page = page;
+{%- for operation in def.operations %}
+{%- for call in operation.calls %}
+        this.{{ call.component.lower() }} = {{ call.component.lower() }};
+{%- endfor %}
+{%- endfor %}
+    }
+{{ operations_code }}
+}

@@ -1,0 +1,21 @@
+{%- set prefix = naming.test_method_prefix -%}
+{%- if imports_code %}
+{{ imports_code }}
+
+{% endif -%}
+{%- if def.description and style.use_docstrings %}
+"""
+{{ def.description }}
+"""
+{% endif -%}
+class {{ naming.class_prefix or '' }}{{ def.class_name }}:
+    """{{ def.description or def.test_name }}"""
+{{ fixtures_code }}
+
+    def {{ prefix }}{{ def.test_name }}(self{% if def.fixtures %}, {{ def.fixtures|join(', ') }}{% endif %}):
+        """{{ def.description or def.test_name }}"""
+{%- if steps_code %}
+{{ steps_code }}
+{%- else %}
+        pass
+{%- endif %}

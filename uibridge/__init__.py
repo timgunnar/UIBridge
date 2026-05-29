@@ -1,5 +1,5 @@
 """uibridge — 给企业 UI 自动化框架装上 AI 接口"""
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 from pathlib import Path
 

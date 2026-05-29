@@ -1269,19 +1269,7 @@ public class TestFlow {
 # ══════════════════════════════════════════════════════════
 
 class TestAggregation:
-    """_AggregationMixin: quick UI check, page index extraction."""
-
-    def test_quick_ui_check_findby(self):
-        extractor = KBExtractor()
-        assert extractor._quick_ui_check("@FindBy(xpath = \"//btn\")") is True
-
-    def test_quick_ui_check_webdriver(self):
-        extractor = KBExtractor()
-        assert extractor._quick_ui_check("WebDriver driver = new ChromeDriver();") is True
-
-    def test_quick_ui_check_no_match(self):
-        extractor = KBExtractor()
-        assert extractor._quick_ui_check("public class User { private String name; }") is False
+    """Aggregation extractor: page index extraction."""
 
     def test_extract_page_index(self, tmp_path):
         page1 = _make_java_file(tmp_path, "pages/LoginPage.java", """

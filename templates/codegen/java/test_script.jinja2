@@ -1,0 +1,23 @@
+{%- set prefix = naming.test_method_prefix -%}
+{%- if style.package_name %}
+package {{ style.package_name }};
+{% endif -%}
+{%- if imports_code %}
+{{ imports_code }}
+
+{% endif %}
+/**
+ * {{ def.description or def.test_name }}
+ */
+public class {{ naming.class_prefix or '' }}{{ def.class_name }}{% if style.extends_class %} extends {{ style.extends_class }}{% endif %} {
+{{ fixtures_code }}
+
+    {{ style.test_annotation or '@Test' }}
+    public void {{ prefix }}{{ def.class_name[0].lower() }}{{ def.class_name[1:] }}() {
+{%- if steps_code %}
+{{ steps_code }}
+{%- else %}
+        // TODO: 实现测试步骤
+{%- endif %}
+    }
+}

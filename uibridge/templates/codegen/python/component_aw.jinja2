@@ -1,0 +1,15 @@
+{%- set q = naming.quote_char -%}
+class {{ def.class_name }}({{ def.base_class }}):
+    """{{ def.class_name }} - 自动生成的组件封装"""
+{%- if style.use_docstrings and def.xpath %}
+    # XPath: {{ def.xpath }}
+{%- endif %}
+
+    def __init__(self, page):
+{%- if def.base_class and def.base_class != "object" %}
+        super().__init__(page)
+{%- else %}
+        self.page = page
+{%- endif %}
+        self.root = page.locator({{ q }}{{ def.xpath }}{{ q }})
+{{ methods_code }}

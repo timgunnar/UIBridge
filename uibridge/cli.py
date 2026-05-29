@@ -40,7 +40,7 @@ def _ensure_browser_or_die():
 # ═══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option(version="0.4.0")
+@click.version_option(version="0.4.1")
 def cli():
     """UIBridge — UI自动化测试框架知识翻译层"""
 

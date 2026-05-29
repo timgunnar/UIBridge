@@ -1,0 +1,9 @@
+{# test_data 模板 — 测试数据文件 #}
+{%- if def.content %}
+{{ def.content }}
+{%- else %}
+# {{ def.file_path or 'test_data.py' }}
+# 自动生成的测试数据
+
+test_data = {}
+{%- endif %}

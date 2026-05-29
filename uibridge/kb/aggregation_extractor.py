@@ -1,7 +1,6 @@
 """Aggregated extraction — Phase 2 aggregated KB extraction from profiled projects."""
 
 import logging
-import re
 from pathlib import Path
 
 from .extractor._base import safe_relative_to
@@ -100,44 +99,28 @@ class AggregationExtractor:
 
     def _filter_ui_files(self, files: list[Path],
                          profile: "FrameworkProfile") -> list[Path]:
-        """只保留 UI 相关包路径中的文件。"""
+        """Filter to UI-relevant files using scanner's multi-signal filter.
+
+        两阶段过滤：
+        1. Profile ui_packages 预过滤（团队已知的 UI 包路径）
+        2. UIRelevanceFilter 多信号打分（PATH + NAMING + INHERITANCE
+           + ANNOTATION + LOCATOR，至少 2 个独立信号命中）
+        """
+        # Phase 1: profile-based package matching
         ui_packages = profile.ui_packages.value or []
-        if not ui_packages:
-            return list(files)
+        if ui_packages:
+            pre_filtered = []
+            for f in files:
+                path_str = str(f).replace("\\", "/")
+                if any(pkg in path_str for pkg in ui_packages):
+                    pre_filtered.append(f)
+            if pre_filtered:
+                files = pre_filtered
 
-        result = []
-        for f in files:
-            path_str = str(f).replace("\\", "/")
-            # Match against inferred UI packages
-            for pkg in ui_packages:
-                if pkg in path_str:
-                    result.append(f)
-                    break
-            else:
-                # Fallback: check individual file for UI relevance
-                if f.suffix == ".java":
-                    try:
-                        content = f.read_text("utf-8")[:2000]  # Only read first 2KB
-                        if self._quick_ui_check(content):
-                            result.append(f)
-                    except Exception:
-                        logger.warning("Failed to read file for UI check: %s", f, exc_info=True)
-                        pass
-                else:
-                    result.append(f)  # Python files — include by default
-        return result
-
-    def _quick_ui_check(self, content: str) -> bool:
-        """Quick check if file content suggests UI relevance."""
-        ui_indicators = [
-            r'@FindBy', r'@Page', r'@Component', r'By\.\w+\(', r'WebElement',
-            r'WebDriver', r'getPage\(\)', r'PageObject', r'extends\s+\w*(?:Page|Component|AW|Widget)',
-            r'data-module', r'data-testid', r'data-test',
-        ]
-        for pattern in ui_indicators:
-            if re.search(pattern, content):
-                return True
-        return False
+        # Phase 2: multi-signal UI relevance filter
+        from uibridge.scanner.filter import UIRelevanceFilter
+        ui_filter = UIRelevanceFilter(self.project_root)
+        return ui_filter.filter(files, min_signals=2)
 
     def _group_by_component_family(self, files: list[Path],
                                    profile: "FrameworkProfile") -> dict[str, list[Path]]:

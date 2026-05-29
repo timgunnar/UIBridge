@@ -1,0 +1,22 @@
+{# xpath_register 模板 — Java XPath 注册文件 #}
+{%- set q = naming.quote_char -%}
+{%- if style.package_name %}
+package {{ style.package_name }};
+{%- endif %}
+
+/**
+ * XPath 注册表 — 自动生成的元素定位器
+ */
+public class XPathRegister {
+{%- if def.xpaths %}
+{%-   for item in def.xpaths %}
+{%-     if item is mapping %}
+    public static final String {{ item.name | upper }} = {{ q }}{{ item.xpath }}{{ q }};
+{%-     else %}
+    public static final String {{ item | upper }} = {{ q }}{{ item }}{{ q }};
+{%-     endif %}
+{%-   endfor %}
+{%- else %}
+    // 在此注册 XPath 常量
+{%- endif %}
+}

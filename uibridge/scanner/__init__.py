@@ -16,6 +16,7 @@ Usage:
 
 from .discover import Scanner, ProjectProfile, ProfileField
 from .parser import UnifiedAST, parse_file, ASTNode
+from .filter import UIRelevanceFilter, UISignal, UIRelevanceScore
 from .primitives import (
     FileScanner,
     InheritanceAnalyzer,
@@ -31,6 +32,10 @@ __all__ = [
     "Scanner",
     "ProjectProfile",
     "ProfileField",
+    # Filter
+    "UIRelevanceFilter",
+    "UISignal",
+    "UIRelevanceScore",
     # Parser
     "UnifiedAST",
     "parse_file",

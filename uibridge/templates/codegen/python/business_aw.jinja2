@@ -1,0 +1,7 @@
+class {{ def.class_name }}:
+    """{{ def.class_name }} - 自动生成的业务操作封装"""
+
+    def __init__(self, page, components=None):
+        self.page = page
+        self.components = components or {}
+{{ operations_code }}

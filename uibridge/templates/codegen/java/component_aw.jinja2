@@ -1,0 +1,20 @@
+{%- set q = naming.quote_char -%}
+{%- if style.package_name %}
+package {{ style.package_name }};
+{% endif %}
+
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.support.FindBy;
+
+/**
+ * {{ def.class_name }} - 自动生成的组件封装
+{%- if def.xpath %}
+ * XPath: {{ def.xpath }}
+{%- endif %}
+ */
+public class {{ def.class_name }}{% if def.base_class and def.base_class != 'BaseAW' and def.base_class != 'object' %} extends {{ def.base_class }}{% endif %} {
+
+    @FindBy(xpath = {{ q }}{{ def.xpath }}{{ q }})
+    private WebElement root;
+{{ methods_code }}
+}

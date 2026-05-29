@@ -4,19 +4,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Stub classes (adapter/ deleted in v0.4.0, moved to scanner+generator) ──
+
 class BAWDef:
     def __init__(self, class_name="", module="", operations=None):
         self.class_name = class_name; self.module = module; self.operations = operations or []
+
+
 class BAWOperationDef:
     def __init__(self, name="", params=None, calls=None):
         self.name = name; self.params = params or []; self.calls = calls or []
+
+
 class CallDef:
     def __init__(self, component="", method="", args=None, data_binding=""):
         self.component = component; self.method = method; self.args = args or []; self.data_binding = data_binding
-# CodeGenerator/ActionRecognizer stubs — these classes expect injected instances at runtime
-class CodeGenerator:
-    def generate_business_aw(self, baw_def): raise NotImplementedError
+
+
 class ActionRecognizer:
     pass
 
@@ -24,7 +27,10 @@ class ActionRecognizer:
 class BusinessAWGenerator:
     """从频繁模式自动生成业务 AW"""
 
-    def __init__(self, code_gen: CodeGenerator, action_recognizer: ActionRecognizer = None):
+    def __init__(self, code_gen=None, action_recognizer: ActionRecognizer = None):
+        if code_gen is None:
+            from .engine import CodeGenerator
+            code_gen = CodeGenerator(".")
         self.code_gen = code_gen
         self.recognizer = action_recognizer
 

@@ -4,16 +4,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Stub classes (adapter/ deleted in v0.4.0, moved to scanner+generator) ──
+
 class ScriptDef:
     def __init__(self, class_name="", test_name="", description="", imports=None, fixtures=None, steps=None):
         self.class_name = class_name; self.test_name = test_name; self.description = description
         self.imports = imports or []; self.fixtures = fixtures or []; self.steps = steps or []
+
+
 class TestDataDef:
     def __init__(self, file_path="", content=""):
         self.file_path = file_path; self.content = content
-class CodeGenerator:
-    def generate_test_script(self, script_def, template_path=""): raise NotImplementedError
+
+
 class DataFormatter:
     def format(self, values, context): return TestDataDef()
 
@@ -21,9 +23,12 @@ class DataFormatter:
 class TestScriptGenerator:
     """生成测试脚本和测试数据"""
 
-    def __init__(self, code_gen: CodeGenerator, data_fmt: DataFormatter):
+    def __init__(self, code_gen=None, data_fmt: DataFormatter = None):
+        if code_gen is None:
+            from .engine import CodeGenerator
+            code_gen = CodeGenerator(".")
         self.code_gen = code_gen
-        self.data_fmt = data_fmt
+        self.data_fmt = data_fmt or DataFormatter()
 
     def generate(self, test_name: str, imports: list[str],
                  fixtures: list[str], steps: list[str],
@@ -39,7 +44,7 @@ class TestScriptGenerator:
             steps=list(steps),
         )
         return self.code_gen.generate_test_script(
-            script_def, template_path=template_path)
+            script_def, style_profile=style_profile)
 
     def generate_data(self, captured_values: dict, domain: str) -> TestDataDef:
         return self.data_fmt.format(captured_values, {"domain": domain})

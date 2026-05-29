@@ -1,0 +1,16 @@
+{# test_data 模板 — Java 测试数据文件 #}
+{%- if style.package_name %}
+package {{ style.package_name }};
+{%- endif %}
+
+/**
+ * 测试数据 - {{ def.file_path or 'TestData' }}
+ * 自动生成
+ */
+public class TestData {
+{%- if def.content %}
+    // {{ def.content }}
+{%- else %}
+    // 在此定义测试数据常量
+{%- endif %}
+}
